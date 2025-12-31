@@ -2,8 +2,38 @@
 <html lang="it">
 <head>
   <meta charset="utf-8" />
+  <!-- Primary SEO -->
+  <title>RollerGuns.it — Gioco HTML5 a 3 corsie con truppe, boss e statue</title>
+  <meta name="description" content="RollerGuns.it è un gioco HTML5 a 3 corsie: raccogli truppe, affronta nemici e boss, distruggi statue per ottenere armi sempre più forti. Gioca subito nel browser." />
+  <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1" />
+  <link rel="canonical" href="https://rollerguns.it/" />
+
+  <!-- Mobile / PWA-ish basics -->
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Tri-Lane Endless Shooter (Codex + Research Integrated)</title>
+  <meta name="theme-color" content="#0b0f14" />
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+  <!-- Open Graph (Facebook/LinkedIn/WhatsApp) -->
+  <meta property="og:site_name" content="RollerGuns.it" />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://rollerguns.it/" />
+  <meta property="og:title" content="RollerGuns.it — 3 corsie, truppe, boss e armi leggendarie" />
+  <meta property="og:description" content="Gioca subito: potenziamenti a sinistra, nemici al centro, statue a destra. Spara solo da fermo e scala i tier arma fino al boss finale." />
+  <meta property="og:image" content="https://rollerguns.it/og/rollerguns-og-1200x630.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:locale" content="it_IT" />
+
+  <!-- Twitter/X -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="RollerGuns.it — Gioco HTML5 a 3 corsie" />
+  <meta name="twitter:description" content="Truppe, boss, statue e armi fortissime. Gioca nel browser." />
+  <meta name="twitter:image" content="https://rollerguns.it/og/rollerguns-og-1200x630.png" />
+
+  <!-- Hreflang -->
+  <link rel="alternate" href="https://rollerguns.it/" hreflang="it" />
+  <link rel="alternate" href="https://rollerguns.it/" hreflang="x-default" />
   <style>
     html, body { height: 100%; margin: 0; background:#0b0f14; color:#e8eef6; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
     .wrap { display:flex; align-items:center; justify-content:center; height:100%; }
@@ -16,7 +46,42 @@
       backdrop-filter: blur(6px);
     }
     .hint b { color:#fff; }
+    .seo {
+      max-width: 980px;
+      margin: 18px auto 50px;
+      padding: 0 16px;
+      color: rgba(232,238,246,0.9);
+    }
+    .seo h1, .seo h2 { color: #ffffff; }
+    .seo ul { padding-left: 20px; }
   </style>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "name": "RollerGuns.it",
+    "url": "https://rollerguns.it/",
+    "inLanguage": "it-IT",
+    "description": "Gioco HTML5 a 3 corsie con truppe, nemici, boss e statue che sbloccano armi sempre più forti.",
+    "publisher": {
+      "@type": "Organization",
+      "name": "RollerGuns.it",
+      "url": "https://rollerguns.it/"
+    }
+  }
+  </script>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "name": "RollerGuns.it — Gioco HTML5 a 3 corsie",
+    "url": "https://rollerguns.it/",
+    "inLanguage": "it-IT",
+    "description": "Raccogli truppe, affronta boss e distruggi statue per ottenere armi leggendarie. Gioca subito nel browser."
+  }
+  </script>
 </head>
 <body>
 <div class="wrap">
@@ -30,6 +95,30 @@
   <b>Ricerca integrata</b><br/>
   Fixed timestep (update deterministico), object pooling (no GC stutter), lane partitioning collisioni, diminishing returns √N, bilanciamento statue vs DPS, feedback (shake/flash/particles/floating text).
 </div>
+
+<main class="seo">
+  <h1>RollerGuns.it</h1>
+  <p>
+    RollerGuns è un gioco HTML5 a 3 corsie: a sinistra trovi potenziamenti truppe (+1/+2),
+    al centro arrivano nemici e boss, a destra statue con molta vita che, se distrutte,
+    sbloccano armi sempre più forti.
+  </p>
+
+  <h2>Come si gioca</h2>
+  <ul>
+    <li>Cambia corsia per scegliere potenziamenti, combattere o puntare alle statue.</li>
+    <li>Spari solo quando sei fermo: muoversi ti espone agli attacchi.</li>
+    <li>Accumula XP e livelli, potenzia le truppe e affronta il boss finale a fasi.</li>
+  </ul>
+
+  <h2>Caratteristiche</h2>
+  <ul>
+    <li>Progressione armi (spread, piercing, laser, crit)</li>
+    <li>Truppe fisiche che sparano con te</li>
+    <li>Boss e boss finale con fasi</li>
+    <li>Giocabile su desktop e mobile</li>
+  </ul>
+</main>
 
 <script>
 (() => {
