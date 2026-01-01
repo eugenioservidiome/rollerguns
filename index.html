@@ -9,7 +9,7 @@
   <link rel="canonical" href="https://rollerguns.it/" />
 
   <!-- Mobile / PWA-ish basics -->
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
   <meta name="theme-color" content="#0b0f14" />
   <link rel="icon" href="/favicon.ico" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -35,17 +35,29 @@
   <link rel="alternate" href="https://rollerguns.it/" hreflang="it" />
   <link rel="alternate" href="https://rollerguns.it/" hreflang="x-default" />
   <style>
-    html, body { height: 100%; margin: 0; background:#0b0f14; color:#e8eef6; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
-    .wrap { display:flex; align-items:center; justify-content:center; height:100%; }
-    canvas { background: linear-gradient(#0c121a, #06090d); border: 1px solid rgba(255,255,255,.15); border-radius: 14px; box-shadow: 0 10px 40px rgba(0,0,0,.5); touch-action: none; }
-    .hint {
-      position: fixed; left: 16px; bottom: 16px;
-      font-size: 12px; opacity:.85; line-height: 1.35;
-      background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);
-      padding: 10px 12px; border-radius: 12px; max-width: 520px;
-      backdrop-filter: blur(6px);
+    html, body { margin:0; padding:0; background:#0b0f14; color:#e8eef6; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    body { overflow-x: hidden; }
+    canvas { display:block; width:100vw; height:100vh; touch-action:none; }
+    .overlay {
+      position: fixed; inset: 0; display:none;
+      align-items:center; justify-content:center; flex-direction:column;
+      background: rgba(0,0,0,.55); color:#fff; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      padding: 24px; gap: 12px; text-align:center;
+      z-index: 5;
     }
-    .hint b { color:#fff; }
+    .overlay button {
+      border:0; border-radius:14px; padding:12px 16px; font-size:16px;
+      background:#2f6bff; color:#fff;
+    }
+    .hint {
+      position: fixed; left: 12px; right: 12px; bottom: 12px;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      font-size: 12px; color: rgba(255,255,255,.75);
+      display:flex; justify-content:space-between; gap: 10px;
+      pointer-events:none;
+      z-index: 4;
+    }
+    .hint span { background: rgba(255,255,255,.06); padding: 8px 10px; border-radius: 12px; }
     .seo {
       max-width: 980px;
       margin: 18px auto 50px;
@@ -84,16 +96,17 @@
   </script>
 </head>
 <body>
-<div class="wrap">
-  <canvas id="c" width="980" height="620"></canvas>
+<canvas id="c"></canvas>
+
+<div class="overlay" id="gameover">
+  <h2 style="margin:0;">Game Over</h2>
+  <div id="finalStats" style="opacity:.9;"></div>
+  <button id="restartBtn">Ricomincia</button>
 </div>
 
 <div class="hint">
-  <b>Controlli</b><br/>
-  Desktop: ←/A e →/D cambia corsia • Spazio spara (solo se fermo)<br/>
-  Mobile: tap a sinistra/destra dello schermo per cambiare corsia • tap con 2 dita = spara (opzionale)<br/><br/>
-  <b>Ricerca integrata</b><br/>
-  Fixed timestep (update deterministico), object pooling (no GC stutter), lane partitioning collisioni, diminishing returns √N, bilanciamento statue vs DPS, feedback (shake/flash/particles/floating text).
+  <span>Swipe ← / → per cambiare corsia</span>
+  <span>Auto-sparo quando sei fermo</span>
 </div>
 
 <main class="seo">
@@ -123,1048 +136,656 @@
 <script>
 (() => {
   const canvas = document.getElementById("c");
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { alpha: false });
 
-  // ----------------- Utils -----------------
-  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
-  const rnd = (a,b)=>a+Math.random()*(b-a);
-  const lerp = (a,b,t)=>a+(b-a)*t;
+  const overlay = document.getElementById("gameover");
+  const finalStats = document.getElementById("finalStats");
+  const restartBtn = document.getElementById("restartBtn");
 
-  // ----------------- World -----------------
-  const W = canvas.width, H = canvas.height;
-  const roadTop = 90, roadBottom = H - 52;
-  const laneCount = 3;
+  // ----- Utilities
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const rand = (a, b) => a + Math.random() * (b - a);
 
-  const roadX = 270;
-  const roadWidth = 450;
-  const laneW = roadWidth / laneCount;
-  const laneCenterX = (lane)=> roadX + laneW*lane + laneW/2;
+  // ----- Responsive size
+  let W = 0, H = 0, DPR = 1;
+  function resize() {
+    DPR = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    W = Math.floor(window.innerWidth * DPR);
+    H = Math.floor(window.innerHeight * DPR);
+    canvas.width = W;
+    canvas.height = H;
+  }
+  window.addEventListener("resize", resize, { passive:true });
+  resize();
 
-  // Visual effects (research "juice")
-  let shakeT = 0;
-  let shakeMag = 0;
-  let flashT = 0;
+  // ----- Lanes
+  function laneX(i) {
+    const margin = W * 0.14;
+    const usable = W - margin * 2;
+    return margin + usable * (i / 2);
+  }
 
-  function screenShake(mag=6, ms=120){ shakeMag = Math.max(shakeMag, mag); shakeT = Math.max(shakeT, ms); }
-  function screenFlash(ms=100){ flashT = Math.max(flashT, ms); }
+  // ----- Game state
+  let tPrev = performance.now();
+  let running = true;
 
-  // ----------------- Player -----------------
+  // Player stats
   const player = {
     lane: 1,
-    x: laneCenterX(1),
-    y: roadBottom - 50,
-    r: 16,
-
+    laneFrom: 1,
+    laneTo: 1,
+    laneT: 1,
+    laneMoveDur: 0.22,
     moving: false,
-    moveT: 0,
-    moveDur: 180,            // research: move is not teleport; measurable duration
-    moveFromX: laneCenterX(1),
-    moveToX: laneCenterX(1),
 
-    hp: 100, hpMax: 100,
-    troops: 3,
-    xp: 0, level: 1,
+    x: 0,
+    y: 0,
+    r: 18,
+
+    level: 1,
+    xp: 0,
+    xpToNext: 30,
+
+    hpMax: 100,
+    hp: 100,
+
+    troops: 5,
+    troopHPPer: 18,
+    troopPool: 5 * 18,
 
     weaponTier: 1,
-    damageBase: 6,
-    fireRate: 170,
-    fireCd: 0,
-
-    invuln: 0,
-    laneChangePenaltyArmed: false
+    dmg: 10,
+    fireRate: 6,
+    bulletSpeed: 800,
+    lastShot: 0
   };
 
-  function xpToNextLevel(lv){ return 45 + (lv-1)*35; }
-
-  function gainXP(amount){
-    player.xp += amount;
-    while (player.xp >= xpToNextLevel(player.level)){
-      player.xp -= xpToNextLevel(player.level);
-      player.level++;
-      player.hpMax += 10;
-      player.hp = Math.min(player.hp + 10, player.hpMax);
-      player.damageBase += 1;
-      if (player.level % 3 === 0) player.troops += 1;
-      floatingText(`LEVEL ${player.level}!`, player.x, player.y - 40, 900, true);
-      screenFlash(90);
-    }
+  function recalcWeapon() {
+    const tier = player.weaponTier;
+    player.dmg = Math.round(8 + tier * 6 + Math.pow(tier, 1.15));
+    player.fireRate = clamp(5 + tier * 0.8, 5, 12);
+    player.bulletSpeed = 820 + tier * 25;
   }
 
-  // ----------------- Weapon progression -----------------
-  function weaponConfig(tier){
-    const t = clamp(tier, 1, 8);
-    const cfg = {
-      1: { name:"Pistola",  pellets:1, spreadDeg:0,  piercing:0, speed:560, laser:false, crit:0.02, damageMult:1.00 },
-      2: { name:"Doppio",   pellets:2, spreadDeg:10, piercing:0, speed:575, laser:false, crit:0.03, damageMult:0.92 },
-      3: { name:"Piercing", pellets:1, spreadDeg:0,  piercing:1, speed:600, laser:false, crit:0.04, damageMult:1.05 },
-      4: { name:"Triple",   pellets:3, spreadDeg:14, piercing:0, speed:610, laser:false, crit:0.05, damageMult:0.95 },
-      5: { name:"Laser",    pellets:1, spreadDeg:0,  piercing:999,speed:0,  laser:true,  crit:0.02, damageMult:0.55 },
-      6: { name:"Pierce+",  pellets:2, spreadDeg:8,  piercing:2, speed:650, laser:false, crit:0.06, damageMult:1.10 },
-      7: { name:"Shotgun",  pellets:5, spreadDeg:28, piercing:0, speed:640, laser:false, crit:0.07, damageMult:0.85 },
-      8: { name:"Overdrive",pellets:3, spreadDeg:12, piercing:3, speed:700, laser:false, crit:0.10, damageMult:1.25 },
-    };
-    return cfg[t] || cfg[1];
+  function recalcTroopPool() {
+    player.troopPool = player.troops * player.troopHPPer;
+    if (player.troops <= 0) player.troopPool = 0;
   }
 
-  // research: diminishing returns on N (sqrt) to avoid snowball unstoppable
-  function troopMultiplier(){
-    const n = Math.max(0, player.troops);
-    return 1 + 0.35 * Math.sqrt(Math.min(n, 100)) / 10; // gentle √N scaling
-  }
+  const bullets = [];
+  const enemies = [];
+  const pickups = [];
+  const statues = [];
 
-  function computedBaseDamage(){
-    const cfg = weaponConfig(player.weaponTier);
-    const tierBoost = 1 + (player.weaponTier-1)*0.22;
-    return player.damageBase * troopMultiplier() * tierBoost * cfg.damageMult;
-  }
+  let meters = 0;
+  let difficulty = 1;
+  let waveIndex = 0;
+  let nextEnemyIn = 0;
+  let nextPickupIn = 2.0;
+  let nextStatueIn = 4.5;
 
-  // ----------------- Object Pooling (research) -----------------
-  function makePool(factory, size){
-    const arr = new Array(size);
-    for (let i=0;i<size;i++) arr[i] = factory();
-    return arr;
-  }
-  function poolAcquire(pool){
-    for (let i=0;i<pool.length;i++){
-      if (!pool[i].active) { pool[i].active = true; return pool[i]; }
-    }
-    return null; // pool exhausted (better than allocating)
-  }
+  let roadOffset = 0;
 
-  // Bullets pool
-  const BULLET_POOL_SIZE = 420;
-  const bulletPool = makePool(()=>({
-    active:false, type:"bullet",
-    lane:1, x:0, y:0, vx:0, vy:0, r:5,
-    dmg:0, hitsLeft:1, crit:false, ally:false,
-    life:0, y1:0, y2:0, dmgPerTick:0
-  }), BULLET_POOL_SIZE);
+  // ----- Touch input (swipe)
+  let touchStartX = null;
+  let touchStartY = null;
+  let touchStartTime = null;
 
-  // Particles pool
-  const PARTICLE_POOL_SIZE = 520;
-  const particlePool = makePool(()=>({
-    active:false, x:0, y:0, vx:0, vy:0, life:0, size:2, alpha:1
-  }), PARTICLE_POOL_SIZE);
-
-  // Floating texts (simple pool)
-  const TEXT_POOL_SIZE = 60;
-  const textPool = makePool(()=>({
-    active:false, text:"", x:0, y:0, vy:-0.07, life:0, big:false
-  }), TEXT_POOL_SIZE);
-
-  function spawnParticle(x,y, count=10){
-    for (let i=0;i<count;i++){
-      const p = poolAcquire(particlePool);
-      if (!p) break;
-      p.x = x; p.y = y;
-      p.vx = rnd(-0.22,0.22);
-      p.vy = rnd(-0.35,-0.08);
-      p.life = rnd(280, 520);
-      p.size = rnd(2,4);
-      p.alpha = 1;
-    }
-  }
-
-  function floatingText(text,x,y,life=600,big=false){
-    const t = poolAcquire(textPool);
-    if (!t) return;
-    t.text = text; t.x = x; t.y = y;
-    t.life = life; t.big = big;
-    t.vy = big ? -0.05 : -0.07;
-  }
-
-  // ----------------- Entities (lane partitioning) -----------------
-  const pickups = []; // small count; ok without pool
-  const statues = []; // small count; ok without pool
-
-  // Enemies: we keep arrays but partition by lane (only center lane in this design)
-  const enemies = []; // all enemies are lane 1 for now (center), but we keep lane field
-
-  // Pattern: troop -> miniboss -> boss -> finalboss
-  const enemyPattern = ["troop","troop","troop","miniboss","troop","troop","boss","troop","miniboss","troop","boss","finalboss"];
-  let patternIndex = 0;
-
-  let pickupTimer = 0;
-  let enemyTimer = 0;
-  let statueTimer = 0;
-
-  function enemyStats(kind, finalPhase=1){
-    if (kind === "troop")     return { hp: 24, speed:rnd(95,125), dmg:6,  xp:10, size:15, atkRate:620 };
-    if (kind === "miniboss")  return { hp: 70, speed:rnd(78,95),  dmg:13, xp:35, size:21, atkRate:560 };
-    if (kind === "boss")      return { hp: 160,speed:rnd(62,80),  dmg:19, xp:70, size:27, atkRate:520 };
-    const base = { hp: 360, speed:rnd(52,66), dmg:26, xp:180, size:34, atkRate:520 };
-    if (finalPhase === 2) return { ...base, speed: base.speed*1.05, dmg: base.dmg+5,  atkRate: 430 };
-    if (finalPhase === 3) return { ...base, speed: base.speed*1.10, dmg: base.dmg+10, atkRate: 360 };
-    return base;
-  }
-
-  function spawnEnemy(kindOverride=null){
-    const lane = 1;
-    const kind = kindOverride ?? enemyPattern[patternIndex];
-    patternIndex = (patternIndex + 1) % enemyPattern.length;
-
-    if (kind === "finalboss"){
-      const s = enemyStats("finalboss", 1);
-      enemies.push({
-        kind:"finalboss",
-        lane,
-        x: laneCenterX(lane),
-        y: roadTop - 40,
-        r: s.size,
-        hp: s.hp, hpMax: s.hp,
-        speed: s.speed, dmg: s.dmg,
-        xp: s.xp,
-        attackCd: 0,
-        atkRate: s.atkRate,
-        phase: 1,
-        phaseTriggered2:false,
-        phaseTriggered3:false,
-        addSpawnCd: 1200
-      });
-      floatingText("FINAL BOSS!", laneCenterX(1), roadTop + 10, 1000, true);
-      screenFlash(120);
-      return;
-    }
-
-    const s = enemyStats(kind);
-    enemies.push({
-      kind,
-      lane,
-      x: laneCenterX(lane),
-      y: roadTop - 32,
-      r: s.size,
-      hp: s.hp, hpMax: s.hp,
-      speed: s.speed, dmg: s.dmg,
-      xp: s.xp,
-      attackCd: 0,
-      atkRate: s.atkRate
-    });
-  }
-
-  function spawnPickup(){
-    pickups.push({
-      lane:0,
-      x: laneCenterX(0),
-      y: roadTop - 22,
-      r: 14,
-      value: Math.random()<0.6 ? 1 : 2,
-      speed: rnd(90, 120),
-    });
-  }
-
-  // research: statue HP should be feasible vs DPS in visibility window
-  // HP_statua ≈ 0.85 * DPS * (T_vis - T_move)
-  function computeStatueHP(scrollSpeedPxS, dps, moveMs){
-    const Tvis = (H / scrollSpeedPxS) * 1000; // ms
-    const Tmax = Math.max(200, Tvis - moveMs);
-    return 0.85 * dps * (Tmax/1000);
-  }
-
-  function spawnStatue(scrollSpeedPxS){
-    const dps = computedBaseDamage() * (1000/player.fireRate); // rough DPS estimate
-    const hp = clamp(computeStatueHP(scrollSpeedPxS, dps, player.moveDur), 180, 1600) * (1 + (player.weaponTier-1)*0.10);
-
-    statues.push({
-      lane:2,
-      x: laneCenterX(2),
-      y: roadTop - 40,
-      w: 42, h: 70,
-      hp, hpMax: hp,
-      speed: rnd(58, 76)
-    });
-  }
-
-  function destroyStatue(){
-    player.weaponTier = clamp(player.weaponTier + 1, 1, 8);
-    player.hp = Math.min(player.hp + 10, player.hpMax);
-    player.troops += 1; // small extra reward: makes right lane tempting
-    gainXP(30 + player.weaponTier*12);
-    floatingText(`TIER +1`, player.x, player.y - 55, 750, true);
-    spawnParticle(player.x, player.y - 20, 24);
-    screenShake(7, 140);
-    screenFlash(90);
-  }
-
-  // ----------------- Troops visuals -----------------
-  function troopPositions(){
-    const n = clamp(player.troops, 0, 12);
-    const arr = [];
-    for (let i=0;i<n;i++){
-      const row = Math.floor(i/4);
-      const col = i%4;
-      const ox = (col-1.5)*14;
-      const oy = 26 + row*16;
-      arr.push({ x: player.x + ox, y: player.y + oy, r: 7 });
-    }
-    return arr;
-  }
-
-  // ----------------- Damage model -----------------
-  function applyIncomingDamage(dmg){
-    const troopAbsorb = 12;
-    let remaining = dmg;
-    while (remaining > 0 && player.troops > 0){
-      remaining -= troopAbsorb;
-      player.troops -= 1;
-      floatingText("-1", player.x - 30, player.y + 12, 420, false);
-    }
-    if (remaining > 0){
-      player.hp -= remaining;
-      floatingText(`-${Math.ceil(remaining)}`, player.x + 26, player.y, 520, false);
-    }
-    player.invuln = 120;
-    screenShake(4, 90);
-  }
-
-  // ----------------- Shooting using pool -----------------
-  function shootBurst(fromX, fromY, lane, dmg, cfg, isAlly=false){
-    const pellets = cfg.pellets;
-    const spread = cfg.spreadDeg;
-
-    for (let i=0;i<pellets;i++){
-      const t = pellets === 1 ? 0 : (i/(pellets-1))*2 - 1; // -1..1
-      const angle = (t * spread) * Math.PI/180;
-
-      const vx = Math.sin(angle) * cfg.speed;
-      const vy = -Math.cos(angle) * cfg.speed;
-
-      const b = poolAcquire(bulletPool);
-      if (!b) break;
-
-      const isCrit = Math.random() < cfg.crit;
-      b.type = "bullet";
-      b.lane = lane;
-      b.x = fromX;
-      b.y = fromY;
-      b.vx = vx;
-      b.vy = vy;
-      b.r = isAlly ? 4 : 5;
-      b.dmg = isCrit ? dmg*1.65 : dmg;
-      b.hitsLeft = (cfg.piercing + 1) - (isAlly ? 1 : 0);
-      b.crit = isCrit;
-      b.ally = isAlly;
-      b.life = 0;
-    }
-  }
-
-  function shootLaser(fromX, fromY, lane, dmg){
-    const b = poolAcquire(bulletPool);
-    if (!b) return;
-    b.type = "laser";
-    b.lane = lane;
-    b.x = fromX;
-    b.y1 = fromY;
-    b.y2 = roadTop - 12;
-    b.life = 120;
-    b.dmgPerTick = dmg;
-    b.hitsLeft = 999;
-    b.crit = false;
-    b.ally = false;
-  }
-
-  function tryShoot(){
-    if (player.moving) return;        // stop-to-shoot
-    if (player.fireCd > 0) return;
-
-    const cfg = weaponConfig(player.weaponTier);
-    const baseDmg = computedBaseDamage();
-
-    if (cfg.laser){
-      shootLaser(player.x, player.y - 18, player.lane, baseDmg);
-      player.fireCd = Math.max(90, player.fireRate - 20);
-    } else {
-      shootBurst(player.x, player.y - 20, player.lane, baseDmg, cfg, false);
-
-      // allies shoot (light)
-      const troops = troopPositions();
-      for (let i=0;i<troops.length;i++){
-        if (i % 2 === 1 && player.weaponTier <= 2) continue;
-        shootBurst(troops[i].x, troops[i].y - 14, player.lane, baseDmg*0.35, { ...cfg, pellets:1, spreadDeg:0, piercing:Math.max(0,cfg.piercing-1) }, true);
-      }
-
-      player.fireCd = player.fireRate;
-    }
-  }
-
-  // ----------------- Input (desktop + mobile tap zones) -----------------
-  const keys = new Set();
-  window.addEventListener("keydown", (e)=>{
-    if (["ArrowLeft","ArrowRight","Space","KeyA","KeyD"].includes(e.code)) e.preventDefault();
-    keys.add(e.code);
-  });
-  window.addEventListener("keyup", (e)=> keys.delete(e.code));
-
-  function startMove(dir){
+  function tryMoveLane(dir) {
     if (player.moving) return;
-    const nextLane = clamp(player.lane + dir, 0, 2);
-    if (nextLane === player.lane) return;
+    const target = clamp(player.lane + dir, 0, 2);
+    if (target === player.lane) return;
 
-    player.lane = nextLane;
+    player.laneFrom = player.lane;
+    player.laneTo = target;
+    player.laneT = 0;
     player.moving = true;
-    player.moveT = 0;
-    player.moveFromX = player.x;
-    player.moveToX = laneCenterX(nextLane);
-
-    // penalty window armed once
-    player.laneChangePenaltyArmed = true;
   }
 
-  // Tap zones (research)
-  canvas.addEventListener("pointerdown", (e)=>{
-    const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-    // left half -> move left; right half -> move right
-    if (x < canvas.width/2) startMove(-1);
-    else startMove(+1);
-  }, { passive:false });
-
-  // Optional: two-finger tap to shoot on mobile (very simple)
-  canvas.addEventListener("touchstart", (e)=>{
-    if (e.touches && e.touches.length >= 2) tryShoot();
+  window.addEventListener("touchstart", (e) => {
+    if (!running) return;
+    const t = e.changedTouches[0];
+    touchStartX = t.clientX;
+    touchStartY = t.clientY;
+    touchStartTime = performance.now();
   }, { passive:true });
 
-  // ----------------- Difficulty / scroll speed logistic (research) -----------------
-  let difficultyL = 0; // increases over time
-  function scrollSpeedPxS(L){
-    const vMin = 230;
-    const vMax = 420;
-    const k = 0.04;
-    return vMin + (vMax - vMin) * (1 - Math.exp(-k * L));
+  window.addEventListener("touchend", (e) => {
+    if (!running) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStartX;
+    const dy = t.clientY - touchStartY;
+    const dt = performance.now() - touchStartTime;
+
+    const absX = Math.abs(dx), absY = Math.abs(dy);
+    const minDist = 40;
+    const maxTime = 450;
+    if (dt <= maxTime && absX >= minDist && absX > absY * 1.15) {
+      tryMoveLane(dx > 0 ? +1 : -1);
+    }
+  }, { passive:true });
+
+  document.body.addEventListener("touchmove", (e) => e.preventDefault(), { passive:false });
+
+  window.addEventListener("keydown", (e) => {
+    if (e.code === "ArrowLeft" || e.code === "KeyA") tryMoveLane(-1);
+    if (e.code === "ArrowRight" || e.code === "KeyD") tryMoveLane(1);
+  });
+
+  // ----- Spawning logic
+  function enemyTypeByWave(idx) {
+    const mod12 = idx % 12;
+    if (mod12 === 11) return "final";
+    if (mod12 === 6) return "boss";
+    if (mod12 === 3 || mod12 === 9) return "miniboss";
+    return "grunt";
   }
 
-  // ----------------- Collisions (lane partitioning) -----------------
-  function circleHit(ax,ay,ar,bx,by,br){
-    const dx = ax-bx, dy = ay-by;
-    return dx*dx + dy*dy < (ar+br)*(ar+br);
+  function spawnEnemy() {
+    const type = enemyTypeByWave(waveIndex++);
+    const baseSpeed = 140 + difficulty * 10;
+    const baseHP = 22 + difficulty * 4;
+
+    let hp, speed, dmgPerSec, radius;
+    if (type === "grunt") {
+      hp = baseHP;
+      speed = baseSpeed + rand(-10, 25);
+      dmgPerSec = 14 + difficulty * 1.2;
+      radius = 16;
+    } else if (type === "miniboss") {
+      hp = baseHP * 5;
+      speed = baseSpeed * 0.9;
+      dmgPerSec = 26 + difficulty * 1.6;
+      radius = 22;
+    } else if (type === "boss") {
+      hp = baseHP * 12;
+      speed = baseSpeed * 0.8;
+      dmgPerSec = 44 + difficulty * 2.2;
+      radius = 28;
+    } else {
+      hp = baseHP * 20;
+      speed = baseSpeed * 0.75;
+      dmgPerSec = 62 + difficulty * 2.8;
+      radius = 34;
+    }
+
+    enemies.push({
+      lane: 1,
+      x: laneX(1),
+      y: -80,
+      r: radius,
+      type,
+      hpMax: hp,
+      hp,
+      speed,
+      dmgPerSec,
+      alive: true
+    });
   }
 
-  // ----------------- Fixed timestep game loop (research) -----------------
-  // Render at rAF, update at fixed 60Hz
-  const FIXED_DT = 1000/60;
-  let accumulator = 0;
-  let last = performance.now();
-  let roadScroll = 0;
-  let gameOver = false;
+  function spawnPickup() {
+    const amount = Math.random() < 0.65 ? 1 : 2;
+    pickups.push({
+      lane: 0,
+      x: laneX(0),
+      y: -60,
+      r: 14,
+      amount,
+      speed: 170 + difficulty * 8
+    });
+  }
 
-  // Spawners
-  let pickupTimer = 0;
-  let enemyTimer = 0;
-  let statueTimer = 0;
+  function statueHPForTier(tier) {
+    return Math.round(160 + tier * 90 + difficulty * 18);
+  }
 
-  function updateFixed(dt){
-    if (gameOver) return;
+  function spawnStatue() {
+    const nextTier = clamp(player.weaponTier, 1, 12);
+    const hp = statueHPForTier(nextTier);
+    statues.push({
+      lane: 2,
+      x: laneX(2),
+      y: -90,
+      w: 46,
+      h: 70,
+      speed: 120 + difficulty * 6,
+      hpMax: hp,
+      hp,
+      tierReward: nextTier,
+      alive: true
+    });
+  }
 
-    // progress difficulty
-    difficultyL += dt/1000;
+  // ----- Combat / XP / Leveling
+  function addXP(x) {
+    player.xp += x;
+    while (player.xp >= player.xpToNext) {
+      player.xp -= player.xpToNext;
+      player.level += 1;
+      player.hpMax += 12;
+      player.hp = Math.min(player.hpMax, player.hp + 18);
 
-    // input
-    if (keys.has("ArrowLeft") || keys.has("KeyA")) startMove(-1);
-    if (keys.has("ArrowRight")|| keys.has("KeyD")) startMove(+1);
-    if (keys.has("Space")) tryShoot();
+      player.troopHPPer += 1;
+      recalcTroopPool();
 
-    // cooldowns
-    player.fireCd = Math.max(0, player.fireCd - dt);
-    player.invuln = Math.max(0, player.invuln - dt);
+      player.xpToNext = Math.round(player.xpToNext * 1.18 + 6);
+    }
+  }
 
-    // movement (lerp over moveDur)
-    if (player.moving){
-      player.moveT += dt;
-      const t = clamp(player.moveT / player.moveDur, 0, 1);
-      player.x = lerp(player.moveFromX, player.moveToX, t);
-      if (t >= 1){
+  function damageTroops(amount) {
+    if (player.troops > 0 && player.troopPool > 0) {
+      player.troopPool = Math.max(0, player.troopPool - amount);
+      const newTroops = Math.ceil(player.troopPool / player.troopHPPer);
+      player.troops = Math.max(0, newTroops);
+      if (player.troops === 0) player.troopPool = 0;
+    } else {
+      player.hp = Math.max(0, player.hp - amount);
+    }
+  }
+
+  function shoot(now) {
+    if (player.moving) return;
+    const cooldown = 1 / player.fireRate;
+    if (now - player.lastShot < cooldown) return;
+    player.lastShot = now;
+
+    bullets.push({
+      lane: player.lane,
+      x: player.x,
+      y: player.y - player.r - 6,
+      r: 6,
+      vy: -player.bulletSpeed,
+      dmg: player.dmg
+    });
+  }
+
+  // ----- Game Over / Restart
+  function endGame() {
+    running = false;
+    overlay.style.display = "flex";
+    finalStats.innerHTML =
+      `Metri: <b>${Math.floor(meters)}</b><br/>` +
+      `Livello: <b>${player.level}</b><br/>` +
+      `Arma Tier: <b>${player.weaponTier}</b>`;
+  }
+
+  function resetGame() {
+    bullets.length = 0;
+    enemies.length = 0;
+    pickups.length = 0;
+    statues.length = 0;
+
+    meters = 0;
+    difficulty = 1;
+    waveIndex = 0;
+    nextEnemyIn = 0.6;
+    nextPickupIn = 2.0;
+    nextStatueIn = 4.0;
+    roadOffset = 0;
+
+    player.lane = 1;
+    player.laneFrom = 1;
+    player.laneTo = 1;
+    player.laneT = 1;
+    player.moving = false;
+
+    player.level = 1;
+    player.xp = 0;
+    player.xpToNext = 30;
+
+    player.hpMax = 100;
+    player.hp = 100;
+
+    player.troops = 5;
+    player.troopHPPer = 18;
+    recalcTroopPool();
+
+    player.weaponTier = 1;
+    recalcWeapon();
+    player.lastShot = 0;
+
+    overlay.style.display = "none";
+    running = true;
+    tPrev = performance.now();
+  }
+
+  restartBtn.addEventListener("click", resetGame);
+  overlay.addEventListener("touchstart", (e) => { e.preventDefault(); }, { passive:false });
+
+  // ----- Update loop
+  function update(dt, now) {
+    const speedMeters = 18 + difficulty * 0.25;
+    meters += speedMeters * dt;
+    difficulty = 1 + meters / 220;
+
+    const targetX = laneX(player.laneTo);
+    const curX = laneX(player.laneFrom);
+
+    if (player.moving) {
+      player.laneT = Math.min(1, player.laneT + dt / player.laneMoveDur);
+      const eased = 1 - Math.pow(1 - player.laneT, 3);
+      player.x = lerp(curX, targetX, eased);
+      if (player.laneT >= 1) {
         player.moving = false;
-        player.x = player.moveToX;
+        player.lane = player.laneTo;
+        player.laneFrom = player.lane;
+        player.laneT = 1;
       }
     } else {
-      // snap gently to lane center (safety)
-      player.x = lerp(player.x, laneCenterX(player.lane), 0.25);
+      player.x = laneX(player.lane);
     }
 
-    // scroll
-    const vScroll = scrollSpeedPxS(difficultyL);
-    roadScroll += dt * 0.28;
-    if (roadScroll > 40) roadScroll = 0;
+    player.y = H * 0.82;
 
-    // spawn timers
-    pickupTimer -= dt;
-    enemyTimer  -= dt;
-    statueTimer -= dt;
+    shoot(now / 1000);
 
-    if (pickupTimer <= 0){
-      spawnPickup();
-      pickupTimer = rnd(1050, 1750);
-    }
-    if (enemyTimer <= 0){
+    nextEnemyIn -= dt;
+    if (nextEnemyIn <= 0) {
       spawnEnemy();
-      enemyTimer = rnd(720, 1080) + (enemies.some(e=>e.kind==="finalboss") ? 500 : 0);
-    }
-    if (statueTimer <= 0){
-      spawnStatue(vScroll);
-      statueTimer = rnd(1750, 2550);
+      const base = 0.85;
+      const scaled = clamp(base - difficulty * 0.015, 0.30, 0.85);
+      nextEnemyIn = scaled + rand(-0.05, 0.08);
     }
 
-    // Move pickups/statues/enemies downward with scroll speed factor
-    for (const p of pickups) p.y += (p.speed + vScroll*0.30) * dt/1000;
-    for (const s of statues) s.y += (s.speed + vScroll*0.20) * dt/1000;
-
-    for (const e of enemies){
-      e.y += (e.speed + vScroll*0.15) * dt/1000;
-
-      // final boss phases
-      if (e.kind === "finalboss"){
-        const pct = e.hp / e.hpMax;
-        if (!e.phaseTriggered2 && pct <= 0.66){
-          e.phaseTriggered2 = true; e.phase = 2;
-          const st = enemyStats("finalboss", 2);
-          e.speed = st.speed; e.dmg = st.dmg; e.atkRate = st.atkRate;
-          floatingText("PHASE 2", e.x, e.y - 40, 800, true);
-          screenFlash(80);
-        }
-        if (!e.phaseTriggered3 && pct <= 0.33){
-          e.phaseTriggered3 = true; e.phase = 3;
-          const st = enemyStats("finalboss", 3);
-          e.speed = st.speed; e.dmg = st.dmg; e.atkRate = st.atkRate;
-          floatingText("PHASE 3", e.x, e.y - 40, 800, true);
-          screenFlash(80);
-        }
-        // adds spawn
-        e.addSpawnCd -= dt;
-        if (e.addSpawnCd <= 0 && e.y > roadTop + 40){
-          if (e.phase >= 2) spawnEnemy(Math.random()<0.6 ? "troop" : "miniboss");
-          e.addSpawnCd = (e.phase===2 ? 1200 : 900);
-        }
-      }
+    nextPickupIn -= dt;
+    if (nextPickupIn <= 0) {
+      spawnPickup();
+      nextPickupIn = rand(2.2, 3.8);
     }
 
-    // Update bullets + laser
-    for (const b of bulletPool){
-      if (!b.active) continue;
-      if (b.type === "bullet"){
-        b.x += b.vx * dt/1000;
-        b.y += b.vy * dt/1000;
-        if (b.y < roadTop - 140 || b.x < roadX-60 || b.x > roadX+roadWidth+60 || b.hitsLeft<=0){
-          b.active = false;
-        }
-      } else {
-        b.life -= dt;
-        if (b.life <= 0) b.active = false;
-      }
+    nextStatueIn -= dt;
+    if (nextStatueIn <= 0) {
+      spawnStatue();
+      nextStatueIn = rand(5.0, 8.0);
     }
 
-    // Update particles
-    for (const p of particlePool){
-      if (!p.active) continue;
-      p.life -= dt;
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.vy += 0.00035 * dt; // gravity-ish
-      p.alpha = clamp(p.life/520, 0, 1);
-      if (p.life <= 0) p.active = false;
+    roadOffset = (roadOffset + (240 + difficulty * 12) * dt) % 60;
+
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      b.y += b.vy * dt;
+      if (b.y < -40) bullets.splice(i, 1);
     }
 
-    // Update floating text
-    for (const t of textPool){
-      if (!t.active) continue;
-      t.life -= dt;
-      t.y += t.vy * dt;
-      if (t.life <= 0) t.active = false;
-    }
-
-    // Pickup collision
-    for (let i=pickups.length-1;i>=0;i--){
+    for (let i = pickups.length - 1; i >= 0; i--) {
       const p = pickups[i];
-      if (p.lane === player.lane && Math.abs(p.y - player.y) < 30){
-        player.troops += p.value;
-        gainXP(7 * p.value);
-        floatingText(`+${p.value} N`, player.x, player.y - 30, 520, false);
-        spawnParticle(p.x, p.y, 12);
-        pickups.splice(i,1);
-      } else if (p.y > roadBottom + 80){
-        pickups.splice(i,1);
+      p.y += p.speed * dt;
+
+      if (p.lane === player.lane && Math.abs(p.y - player.y) < 36 && !player.moving) {
+        player.troops += p.amount;
+        recalcTroopPool();
+        addXP(6 * p.amount);
+        pickups.splice(i, 1);
+        continue;
       }
+      if (p.y > H + 80) pickups.splice(i, 1);
     }
 
-    // Laser tick (first target in lane)
-    for (const b of bulletPool){
-      if (!b.active || b.type !== "laser") continue;
+    for (let i = statues.length - 1; i >= 0; i--) {
+      const s = statues[i];
+      s.y += s.speed * dt;
 
-      // target priority: enemy then statue (same lane)
-      let bestE = null;
-      for (const e of enemies){
-        if (e.lane !== b.lane) continue;
-        if (e.y > roadTop && e.y < player.y && (!bestE || e.y > bestE.y)) bestE = e;
-      }
-      if (bestE){
-        bestE.hp -= b.dmgPerTick * dt/1000 * 3.0;
-        if (bestE.hp <= 0){
-          // kill
-          if (bestE.kind === "finalboss"){
-            gainXP(bestE.xp);
-            player.weaponTier = clamp(player.weaponTier + 2, 1, 8);
-            player.troops += 4;
-            player.hp = Math.min(player.hp + 30, player.hpMax);
-            floatingText("FINAL DOWN!", bestE.x, bestE.y - 30, 1200, true);
-            screenFlash(130);
-            screenShake(10, 180);
-          } else gainXP(bestE.xp);
-
-          spawnParticle(bestE.x, bestE.y, bestE.kind==="finalboss" ? 40 : 18);
-          screenShake(bestE.kind==="finalboss" ? 9 : 5, bestE.kind==="finalboss" ? 180 : 110);
-          // remove enemy
-          const idx = enemies.indexOf(bestE);
-          if (idx>=0) enemies.splice(idx,1);
-        }
-      } else {
-        let bestS = null;
-        for (const s of statues){
-          if (s.lane !== b.lane) continue;
-          if (s.y > roadTop && s.y < player.y && (!bestS || s.y > bestS.y)) bestS = s;
-        }
-        if (bestS){
-          bestS.hp -= b.dmgPerTick * dt/1000 * 2.4;
-          if (bestS.hp <= 0){
-            destroyStatue();
-            spawnParticle(bestS.x, bestS.y, 26);
-            const si = statues.indexOf(bestS);
-            if (si>=0) statues.splice(si,1);
+      for (let j = bullets.length - 1; j >= 0; j--) {
+        const b = bullets[j];
+        if (b.lane !== 2) continue;
+        const left = s.x - s.w/2, right = s.x + s.w/2, top = s.y - s.h/2, bot = s.y + s.h/2;
+        if (b.x > left - b.r && b.x < right + b.r && b.y > top - b.r && b.y < bot + b.r) {
+          s.hp -= b.dmg;
+          bullets.splice(j, 1);
+          if (s.hp <= 0) {
+            player.weaponTier = clamp(player.weaponTier + 1, 1, 20);
+            recalcWeapon();
+            addXP(20 + player.weaponTier * 2);
+            statues.splice(i, 1);
           }
+          break;
         }
       }
+
+      if (i < statues.length && s.y > H + 120) statues.splice(i, 1);
     }
 
-    // Bullet collisions (lane partitioning: check only same lane)
-    function hitEnemy(e, dmg){
-      e.hp -= dmg;
-      if (e.hp <= 0){
-        if (e.kind === "finalboss"){
-          gainXP(e.xp);
-          player.weaponTier = clamp(player.weaponTier + 2, 1, 8);
-          player.troops += 4;
-          player.hp = Math.min(player.hp + 30, player.hpMax);
-          floatingText("FINAL DOWN!", e.x, e.y - 30, 1200, true);
-          screenFlash(130);
-          screenShake(10, 180);
-        } else {
-          gainXP(e.xp);
-        }
-        spawnParticle(e.x, e.y, e.kind==="boss" ? 26 : 16);
-        return true;
-      }
-      return false;
-    }
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const e = enemies[i];
+      e.y += e.speed * dt;
+      e.x = laneX(1);
 
-    for (const b of bulletPool){
-      if (!b.active || b.type !== "bullet") continue;
-
-      // enemies (same lane)
-      for (let ei=enemies.length-1; ei>=0; ei--){
-        const e = enemies[ei];
-        if (e.lane !== b.lane) continue;
-        if (circleHit(b.x,b.y,b.r, e.x,e.y,e.r)){
-          const died = hitEnemy(e, b.dmg);
-          b.hitsLeft -= 1;
-          if (died) enemies.splice(ei,1);
-          if (b.hitsLeft <= 0) { b.active = false; break; }
-        }
-      }
-
-      // statues (same lane)
-      if (b.active && b.hitsLeft > 0){
-        for (let si=statues.length-1; si>=0; si--){
-          const s = statues[si];
-          if (s.lane !== b.lane) continue;
-          const left = s.x - s.w/2, right = s.x + s.w/2, top = s.y - s.h/2, bottom = s.y + s.h/2;
-          if (b.x>=left && b.x<=right && b.y>=top && b.y<=bottom){
-            s.hp -= b.dmg;
-            b.hitsLeft -= 1;
-            if (s.hp <= 0){
-              destroyStatue();
-              spawnParticle(s.x, s.y, 26);
-              statues.splice(si,1);
-            }
-            if (b.hitsLeft <= 0) { b.active = false; break; }
+      for (let j = bullets.length - 1; j >= 0; j--) {
+        const b = bullets[j];
+        if (b.lane !== 1) continue;
+        const dx = b.x - e.x, dy = b.y - e.y;
+        const rr = (b.r + e.r);
+        if (dx*dx + dy*dy <= rr*rr) {
+          e.hp -= b.dmg;
+          bullets.splice(j, 1);
+          if (e.hp <= 0) {
+            const base = e.type === "grunt" ? 10 :
+              e.type === "miniboss" ? 45 :
+                e.type === "boss" ? 110 : 180;
+            addXP(Math.round(base + difficulty * 2));
+            enemies.splice(i, 1);
           }
+          break;
         }
       }
-    }
 
-    // Enemy attacks (reach zone)
-    for (let ei=enemies.length-1; ei>=0; ei--){
-      const e = enemies[ei];
-
-      if (e.y > player.y - 48){
-        e.attackCd -= dt;
-        if (e.attackCd <= 0){
-          applyIncomingDamage(e.dmg);
-          e.attackCd = e.atkRate ?? 520;
-        }
-        if (e.y > roadBottom + 120) enemies.splice(ei,1);
-      } else if (e.y > roadBottom + 120){
-        enemies.splice(ei,1);
+      const contactY = player.y - 70;
+      if (i < enemies.length && e.y >= contactY) {
+        damageTroops(e.dmgPerSec * dt);
+        e.y = contactY;
       }
+
+      if (i < enemies.length && e.y > H + 140) enemies.splice(i, 1);
     }
 
-    // Lane-change penalty: one-time extra hit if danger near while moving (research "cost opportunity")
-    if (player.moving && player.laneChangePenaltyArmed){
-      const dangerY = player.y - 62;
-      let danger = false;
-      for (const e of enemies){
-        if (e.y >= dangerY && e.y <= player.y + 10){
-          if (e.lane === 1 || e.lane === player.lane){ danger = true; break; }
-        }
-      }
-      if (danger){
-        player.laneChangePenaltyArmed = false;
-        applyIncomingDamage(10 + Math.floor(player.level/3)*2);
-        floatingText("MOVE PENALTY", player.x, player.y - 60, 700, true);
-      }
-    }
-
-    // Clean statues
-    for (let si=statues.length-1; si>=0; si--){
-      if (statues[si].y > roadBottom + 160) statues.splice(si,1);
-    }
-
-    // effects timers
-    if (shakeT > 0) shakeT = Math.max(0, shakeT - dt);
-    if (flashT > 0) flashT = Math.max(0, flashT - dt);
-
-    // game over
-    if (player.hp <= 0){
-      player.hp = 0;
-      gameOver = true;
-      screenFlash(180);
-      screenShake(12, 220);
-    }
+    if (player.hp <= 0) endGame();
   }
 
-  // ----------------- Rendering -----------------
-  function roundRect(ctx,x,y,w,h,r){
-    const rr = Math.min(r,w/2,h/2);
-    ctx.beginPath();
-    ctx.moveTo(x+rr,y);
-    ctx.arcTo(x+w,y,x+w,y+h,rr);
-    ctx.arcTo(x+w,y+h,x,y+h,rr);
-    ctx.arcTo(x,y+h,x,y,rr);
-    ctx.arcTo(x,y,x+w,y,rr);
-    ctx.closePath();
-  }
+  // ----- Rendering
+  function drawRoad() {
+    ctx.fillStyle = "#0b0f17";
+    ctx.fillRect(0, 0, W, H);
 
-  function drawRoad(){
-    ctx.save();
-    ctx.fillStyle = "rgba(255,255,255,0.04)";
-    roundRect(ctx, roadX-10, roadTop-12, roadWidth+20, (roadBottom-roadTop)+24, 18);
-    ctx.fill();
+    const roadLeft = W * 0.10;
+    const roadRight = W * 0.90;
+    const roadTop = 0;
+    const roadBot = H;
+
+    ctx.fillStyle = "#10182a";
+    ctx.fillRect(roadLeft, roadTop, roadRight - roadLeft, roadBot - roadTop);
 
     ctx.strokeStyle = "rgba(255,255,255,0.12)";
-    ctx.lineWidth = 2;
-    for (let i=1;i<laneCount;i++){
-      const x = roadX + laneW*i;
+    ctx.lineWidth = 2 * DPR;
+
+    const x0 = laneX(0), x1 = laneX(1), x2 = laneX(2);
+    const sep1 = (x0 + x1) / 2, sep2 = (x1 + x2) / 2;
+
+    function dashedLine(x) {
       ctx.beginPath();
-      ctx.setLineDash([10,12]);
-      ctx.lineDashOffset = -roadScroll;
-      ctx.moveTo(x, roadTop);
-      ctx.lineTo(x, roadBottom);
-      ctx.stroke();
-    }
-    ctx.setLineDash([]);
-
-    ctx.fillStyle = "rgba(255,255,255,0.6)";
-    ctx.font = "12px system-ui";
-    ctx.fillText("SX: +Truppe", roadX + 12, roadTop - 18);
-    ctx.fillText("Centro: Nemici", roadX + laneW + 12, roadTop - 18);
-    ctx.fillText("DX: Statue → Armi", roadX + laneW*2 + 12, roadTop - 18);
-    ctx.restore();
-  }
-
-  function drawHUD(){
-    ctx.save();
-    ctx.fillStyle = "rgba(255,255,255,0.06)";
-    roundRect(ctx, 16, 14, W-32, 58, 14);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,0.10)";
-    ctx.stroke();
-
-    const cfg = weaponConfig(player.weaponTier);
-    ctx.fillStyle = "rgba(255,255,255,0.92)";
-    ctx.font = "14px system-ui";
-    ctx.fillText(`Livello: ${player.level}`, 28, 46);
-    ctx.fillText(`XP: ${player.xp}/${xpToNextLevel(player.level)}`, 132, 46);
-    ctx.fillText(`Truppe: ${player.troops}`, 330, 46);
-    ctx.fillText(`Arma: T${player.weaponTier} (${cfg.name})`, 450, 46);
-    ctx.fillText(`DMG: ${computedBaseDamage().toFixed(1)}`, 690, 46);
-    ctx.fillText(player.moving ? "MOVING (no shoot)" : "IDLE (shoot ok)", 820, 46);
-
-    // HP bar
-    const barW = 250, barH = 10;
-    const hpX = W - 16 - barW;
-    const hpY = 26;
-
-    ctx.fillStyle = "rgba(255,255,255,0.12)";
-    roundRect(ctx, hpX, hpY, barW, barH, 6);
-    ctx.fill();
-
-    const p = player.hpMax > 0 ? player.hp/player.hpMax : 0;
-    ctx.fillStyle = "rgba(80, 200, 140, 0.9)";
-    roundRect(ctx, hpX, hpY, barW*p, barH, 6);
-    ctx.fill();
-
-    ctx.fillStyle = "rgba(255,255,255,0.9)";
-    ctx.font = "12px system-ui";
-    ctx.fillText(`PS: ${Math.ceil(player.hp)}/${player.hpMax}`, hpX, hpY - 6);
-
-    ctx.restore();
-  }
-
-  function drawPlayer(){
-    ctx.save();
-    const hitFlash = player.invuln > 0;
-    ctx.fillStyle = hitFlash ? "rgba(255,120,120,0.95)" : "rgba(120,170,255,0.95)";
-    ctx.beginPath();
-    ctx.arc(player.x, player.y, player.r, 0, Math.PI*2);
-    ctx.fill();
-
-    // gun
-    ctx.strokeStyle = "rgba(255,255,255,0.85)";
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(player.x, player.y - 6);
-    ctx.lineTo(player.x, player.y - 28);
-    ctx.stroke();
-
-    // lane tag
-    ctx.fillStyle = "rgba(255,255,255,0.25)";
-    ctx.font = "12px system-ui";
-    ctx.fillText(["SX","C","DX"][player.lane], player.x - 10, player.y + 36);
-    ctx.restore();
-  }
-
-  function drawTroops(){
-    const tps = troopPositions();
-    for (const t of tps){
-      ctx.save();
-      ctx.fillStyle = "rgba(160,220,255,0.85)";
-      ctx.beginPath();
-      ctx.arc(t.x, t.y, t.r, 0, Math.PI*2);
-      ctx.fill();
-
-      ctx.strokeStyle = "rgba(255,255,255,0.5)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(t.x, t.y - 2);
-      ctx.lineTo(t.x, t.y - 10);
-      ctx.stroke();
-      ctx.restore();
-    }
-  }
-
-  function drawPickups(){
-    for (const p of pickups){
-      ctx.save();
-      ctx.fillStyle = "rgba(160, 255, 200, 0.95)";
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
-      ctx.fill();
-      ctx.fillStyle = "rgba(0,0,0,0.65)";
-      ctx.font = "bold 14px system-ui";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(`+${p.value}`, p.x, p.y);
-      ctx.restore();
-    }
-    ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
-  }
-
-  function drawEnemies(){
-    for (const e of enemies){
-      ctx.save();
-      const kindColor = ({
-        troop: "rgba(255,120,120,0.95)",
-        miniboss: "rgba(255,170,90,0.95)",
-        boss: "rgba(255,90,200,0.95)",
-        finalboss: "rgba(255,230,90,0.95)",
-      })[e.kind] || "rgba(255,120,120,0.95)";
-
-      ctx.fillStyle = kindColor;
-      ctx.beginPath();
-      ctx.arc(e.x, e.y, e.r, 0, Math.PI*2);
-      ctx.fill();
-
-      // HP bar
-      const bw = (e.kind==="finalboss") ? 160 : 52;
-      const bh = 7;
-      const p = e.hp / e.hpMax;
-      ctx.fillStyle = "rgba(255,255,255,0.14)";
-      roundRect(ctx, e.x - bw/2, e.y - e.r - 16, bw, bh, 4); ctx.fill();
-      ctx.fillStyle = "rgba(255,255,255,0.78)";
-      roundRect(ctx, e.x - bw/2, e.y - e.r - 16, bw*p, bh, 4); ctx.fill();
-
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.font = "11px system-ui";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      let tag = "N";
-      if (e.kind==="miniboss") tag="MB";
-      if (e.kind==="boss") tag="B";
-      if (e.kind==="finalboss") tag=`FINAL P${e.phase}`;
-      ctx.fillText(tag, e.x, e.y);
-
-      ctx.restore();
-    }
-    ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
-  }
-
-  function drawStatues(){
-    for (const s of statues){
-      ctx.save();
-      ctx.fillStyle = "rgba(200, 200, 220, 0.9)";
-      roundRect(ctx, s.x - s.w/2, s.y - s.h/2, s.w, s.h, 10);
-      ctx.fill();
-
-      ctx.strokeStyle = "rgba(0,0,0,0.22)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(s.x - 9, s.y - 14);
-      ctx.lineTo(s.x + 5, s.y + 20);
-      ctx.stroke();
-
-      const bw = 70, bh = 6;
-      const p = s.hp / s.hpMax;
-      ctx.fillStyle = "rgba(255,255,255,0.14)";
-      roundRect(ctx, s.x - bw/2, s.y - s.h/2 - 14, bw, bh, 4); ctx.fill();
-      ctx.fillStyle = "rgba(120,210,255,0.85)";
-      roundRect(ctx, s.x - bw/2, s.y - s.h/2 - 14, bw*p, bh, 4); ctx.fill();
-
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.font = "11px system-ui";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("STATUA", s.x, s.y);
-      ctx.restore();
-    }
-    ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
-  }
-
-  function drawBullets(){
-    for (const b of bulletPool){
-      if (!b.active) continue;
-      ctx.save();
-      if (b.type === "laser"){
-        ctx.strokeStyle = "rgba(160, 240, 255, 0.75)";
-        ctx.lineWidth = 6;
-        ctx.beginPath();
-        ctx.moveTo(b.x, b.y1);
-        ctx.lineTo(b.x, b.y2);
-        ctx.stroke();
-
-        ctx.strokeStyle = "rgba(255,255,255,0.85)";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(b.x, b.y1);
-        ctx.lineTo(b.x, b.y2);
-        ctx.stroke();
-      } else {
-        ctx.fillStyle = b.crit ? "rgba(255,245,180,0.95)" : "rgba(255,255,255,0.92)";
-        ctx.beginPath();
-        ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
-        ctx.fill();
+      const dash = 34 * DPR;
+      const gap = 26 * DPR;
+      let y = -roadOffset * DPR;
+      while (y < H + dash) {
+        ctx.moveTo(x, y);
+        ctx.lineTo(x, y + dash);
+        y += dash + gap;
       }
-      ctx.restore();
+      ctx.stroke();
     }
+
+    dashedLine(sep1);
+    dashedLine(sep2);
+
+    ctx.fillStyle = "rgba(255,255,255,0.07)";
+    ctx.fillRect(roadLeft, 0, roadRight-roadLeft, 44*DPR);
   }
 
-  function drawParticles(){
-    for (const p of particlePool){
-      if (!p.active) continue;
-      ctx.save();
-      ctx.globalAlpha = p.alpha;
-      ctx.fillStyle = "rgba(255,255,255,0.9)";
-      ctx.fillRect(p.x, p.y, p.size, p.size);
-      ctx.restore();
-    }
+  function drawHUD() {
+    const pad = 12 * DPR;
+    const barW = W * 0.42;
+    const barH = 10 * DPR;
+
+    ctx.font = `${14 * DPR}px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+    ctx.textBaseline = "top";
+
+    ctx.fillStyle = "rgba(255,255,255,0.18)";
+    ctx.fillRect(pad, pad, barW, barH);
+    ctx.fillStyle = "rgba(255,70,70,0.85)";
+    ctx.fillRect(pad, pad, barW * (player.hp / player.hpMax), barH);
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.fillText(`PS ${Math.ceil(player.hp)}/${player.hpMax}`, pad, pad + 14 * DPR);
+
+    const troopY = pad + 38 * DPR;
+    ctx.fillStyle = "rgba(255,255,255,0.18)";
+    ctx.fillRect(pad, troopY, barW, barH);
+    const troopMax = Math.max(1, player.troops * player.troopHPPer);
+    const troopFrac = troopMax ? (player.troopPool / troopMax) : 0;
+    ctx.fillStyle = "rgba(80,200,255,0.85)";
+    ctx.fillRect(pad, troopY, barW * troopFrac, barH);
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.fillText(`Truppe N=${player.troops}`, pad, troopY + 14 * DPR);
+
+    const xpY = pad + 64 * DPR;
+    ctx.fillStyle = "rgba(255,255,255,0.18)";
+    ctx.fillRect(pad, xpY, barW, barH);
+    ctx.fillStyle = "rgba(140,255,120,0.85)";
+    ctx.fillRect(pad, xpY, barW * (player.xp / player.xpToNext), barH);
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.fillText(`LV ${player.level}  XP ${Math.floor(player.xp)}/${player.xpToNext}`, pad, xpY + 14 * DPR);
+
+    const rightX = W - pad;
+    ctx.textAlign = "right";
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.fillText(`Arma Tier ${player.weaponTier}`, rightX, pad);
+    ctx.fillText(`DMG ${player.dmg} | ROF ${player.fireRate.toFixed(1)}/s`, rightX, pad + 18 * DPR);
+    ctx.fillText(`Metri ${Math.floor(meters)}`, rightX, pad + 36 * DPR);
+    ctx.textAlign = "left";
   }
 
-  function drawFloatingText(){
-    for (const t of textPool){
-      if (!t.active) continue;
-      ctx.save();
-      ctx.fillStyle = "rgba(255,255,255,0.92)";
-      ctx.font = t.big ? "bold 18px system-ui" : "12px system-ui";
-      ctx.textAlign = "center";
-      ctx.fillText(t.text, t.x, t.y);
-      ctx.restore();
-    }
-    ctx.textAlign = "start";
-  }
-
-  function drawGameOver(){
+  function drawPlayer() {
     ctx.save();
-    ctx.fillStyle = "rgba(0,0,0,0.58)";
-    ctx.fillRect(0,0,W,H);
-    ctx.fillStyle = "rgba(255,255,255,0.95)";
-    ctx.font = "bold 44px system-ui";
-    ctx.textAlign = "center";
-    ctx.fillText("GAME OVER", W/2, H/2 - 16);
+    ctx.translate(player.x, player.y);
 
-    ctx.font = "16px system-ui";
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
-    ctx.fillText(`Livello ${player.level} • Truppe ${player.troops} • Tier arma ${player.weaponTier}`, W/2, H/2 + 22);
-    ctx.fillText("Ricarica la pagina per ricominciare.", W/2, H/2 + 48);
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.beginPath();
+    ctx.ellipse(0, 26 * DPR, 18 * DPR, 8 * DPR, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = player.moving ? "rgba(255,255,255,0.75)" : "rgba(255,255,255,0.92)";
+    ctx.beginPath();
+    ctx.arc(0, 0, player.r * DPR, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(255,220,140,0.9)";
+    ctx.lineWidth = 3 * DPR;
+    ctx.beginPath();
+    ctx.moveTo(10 * DPR, -4 * DPR);
+    ctx.lineTo(22 * DPR, -10 * DPR);
+    ctx.stroke();
+
     ctx.restore();
-    ctx.textAlign = "start";
   }
 
-  function render(){
-    // apply camera shake (research)
-    let ox=0, oy=0;
-    if (shakeT > 0){
-      ox = rnd(-shakeMag, shakeMag);
-      oy = rnd(-shakeMag, shakeMag);
+  function drawBullets() {
+    ctx.fillStyle = "rgba(255,220,140,0.95)";
+    for (const b of bullets) {
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r * DPR, 0, Math.PI * 2);
+      ctx.fill();
     }
+  }
 
-    ctx.setTransform(1,0,0,1,0,0);
-    ctx.clearRect(0,0,W,H);
-    ctx.setTransform(1,0,0,1,ox,oy);
+  function drawEnemies() {
+    for (const e of enemies) {
+      let col = "rgba(255,90,120,0.95)";
+      if (e.type === "miniboss") col = "rgba(255,160,80,0.95)";
+      if (e.type === "boss") col = "rgba(210,120,255,0.95)";
+      if (e.type === "final") col = "rgba(255,220,80,0.95)";
 
-    drawHUD();
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.r * DPR, 0, Math.PI * 2);
+      ctx.fill();
+
+      const w = 64 * DPR;
+      const h = 6 * DPR;
+      const x = e.x - w / 2;
+      const y = e.y - (e.r + 18) * DPR;
+      ctx.fillStyle = "rgba(255,255,255,0.14)";
+      ctx.fillRect(x, y, w, h);
+      ctx.fillStyle = "rgba(255,255,255,0.78)";
+      ctx.fillRect(x, y, w * (e.hp / e.hpMax), h);
+    }
+  }
+
+  function drawPickups() {
+    for (const p of pickups) {
+      ctx.fillStyle = "rgba(120,255,160,0.95)";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * DPR, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.font = `${12 * DPR}px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`+${p.amount}`, p.x, p.y);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+    }
+  }
+
+  function drawStatues() {
+    for (const s of statues) {
+      ctx.fillStyle = "rgba(180,200,255,0.20)";
+      ctx.fillRect((s.x - s.w / 2) * DPR, (s.y - s.h / 2) * DPR, s.w * DPR, s.h * DPR);
+
+      ctx.strokeStyle = "rgba(180,200,255,0.55)";
+      ctx.lineWidth = 2 * DPR;
+      ctx.strokeRect((s.x - s.w / 2) * DPR, (s.y - s.h / 2) * DPR, s.w * DPR, s.h * DPR);
+
+      const w = 70 * DPR, h = 6 * DPR;
+      const x = (s.x - w / (2 * DPR)) * DPR;
+      const y = (s.y - s.h / 2 - 16) * DPR;
+      ctx.fillStyle = "rgba(255,255,255,0.14)";
+      ctx.fillRect(x, y, w, h);
+      ctx.fillStyle = "rgba(120,180,255,0.85)";
+      ctx.fillRect(x, y, w * (s.hp / s.hpMax), h);
+
+      ctx.fillStyle = "rgba(255,255,255,0.75)";
+      ctx.font = `${11 * DPR}px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("STATUA", s.x * DPR, (s.y - 6) * DPR);
+      ctx.fillText(`Tier → ${clamp(player.weaponTier + 1, 1, 20)}`, s.x * DPR, (s.y + 10) * DPR);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+    }
+  }
+
+  function render() {
     drawRoad();
-
     drawPickups();
-    drawEnemies();
     drawStatues();
+    drawEnemies();
     drawBullets();
-    drawParticles();
-    drawFloatingText();
-
-    drawTroops();
     drawPlayer();
-
-    if (flashT > 0){
-      ctx.save();
-      ctx.setTransform(1,0,0,1,0,0);
-      ctx.fillStyle = `rgba(255,255,255,${Math.min(0.25, flashT/300)})`;
-      ctx.fillRect(0,0,W,H);
-      ctx.restore();
-    }
-
-    if (gameOver) drawGameOver();
+    drawHUD();
   }
 
-  // ----------------- Main Loop (rAF + fixed update) -----------------
-  function loop(now){
-    const frameDt = clamp(now - last, 0, 50); // clamp helps prevent spiral
-    last = now;
-    accumulator += frameDt;
+  function loop(now) {
+    const dt = clamp((now - tPrev) / 1000, 0, 0.033);
+    tPrev = now;
 
-    while (accumulator >= FIXED_DT){
-      updateFixed(FIXED_DT);
-      accumulator -= FIXED_DT;
-    }
+    if (running) update(dt, now);
     render();
+
     requestAnimationFrame(loop);
   }
-  requestAnimationFrame(loop);
 
+  resetGame();
+  requestAnimationFrame(loop);
 })();
 </script>
 </body>
