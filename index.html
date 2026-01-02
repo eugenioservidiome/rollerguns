@@ -154,6 +154,53 @@
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const lerp = (a, b, t) => a + (b - a) * t;
   const rand = (a, b) => a + Math.random() * (b - a);
+  const TILE = 32;
+
+  const SPRITES = {
+    player_idle: { x: 0, y: 0, w: 32, h: 32 },
+    player_walk1: { x: 32, y: 0, w: 32, h: 32 },
+    player_walk2: { x: 64, y: 0, w: 32, h: 32 },
+    player_walk3: { x: 96, y: 0, w: 32, h: 32 },
+    player_shoot1: { x: 128, y: 0, w: 32, h: 32 },
+    player_shoot2: { x: 160, y: 0, w: 32, h: 32 }
+  };
+
+  const WEAPON_FRAMES = [
+    { x: 0, y: 0, w: 32, h: 32 },
+    { x: 32, y: 0, w: 32, h: 32 },
+    { x: 64, y: 0, w: 32, h: 32 }
+  ];
+
+  const assets = {
+    soldier: new Image(),
+    weapons: new Image(),
+    jeep: new Image(),
+    barrel: new Image(),
+    tower: new Image(),
+    asphalt: new Image(),
+    ready: false,
+    pattern: null
+  };
+
+  function loadImage(img, src) {
+    img.src = src;
+    return img.decode().catch(() => new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+    }));
+  }
+
+  Promise.all([
+    loadImage(assets.soldier, "assets/characters/soldier_spritesheet.png"),
+    loadImage(assets.weapons, "assets/weapons/weapons.png"),
+    loadImage(assets.jeep, "assets/props/jeep.png"),
+    loadImage(assets.barrel, "assets/props/barrel.png"),
+    loadImage(assets.tower, "assets/props/lookout_tower.png"),
+    loadImage(assets.asphalt, "assets/textures/asphalt.png")
+  ]).then(() => {
+    assets.ready = true;
+    assets.pattern = ctx.createPattern(assets.asphalt, "repeat");
+  });
 
   let W = 0;
   let H = 0;
@@ -176,6 +223,7 @@
   }
 
   let tPrev = performance.now();
+  let nowSec = tPrev / 1000;
   let running = true;
 
   const player = {
@@ -224,6 +272,7 @@
   const enemies = [];
   const pickups = [];
   const statues = [];
+  const propSprites = ["jeep", "barrel", "tower"];
 
   let meters = 0;
   let difficulty = 1;
@@ -350,6 +399,7 @@
   function spawnStatue() {
     const nextTier = clamp(player.weaponTier, 1, 12);
     const hp = statueHPForTier(nextTier);
+    const spriteName = propSprites[Math.floor(Math.random() * propSprites.length)];
     statues.push({
       lane: 2,
       x: laneX(2),
@@ -358,7 +408,8 @@
       h: 70,
       speed: 120 + difficulty * 6,
       hpMax: hp,
-      hp
+      hp,
+      spriteName
     });
   }
 
@@ -587,13 +638,18 @@
   }
 
   function drawRoad() {
-    ctx.fillStyle = "#0b0f17";
-    ctx.fillRect(0, 0, W, H);
+    if (assets.ready && assets.pattern) {
+      ctx.fillStyle = assets.pattern;
+      ctx.fillRect(0, 0, W, H);
+    } else {
+      ctx.fillStyle = "#0b0f17";
+      ctx.fillRect(0, 0, W, H);
+    }
 
     const roadLeft = W * 0.10;
     const roadRight = W * 0.90;
 
-    ctx.fillStyle = "#10182a";
+    ctx.fillStyle = "rgba(16,24,42,0.75)";
     ctx.fillRect(roadLeft, 0, roadRight - roadLeft, H);
 
     ctx.strokeStyle = "rgba(255,255,255,0.12)";
@@ -676,10 +732,32 @@
     ctx.ellipse(0, 26, 18, 8, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = "rgba(255,255,255,0.92)";
-    ctx.beginPath();
-    ctx.arc(0, 0, player.r, 0, Math.PI * 2);
-    ctx.fill();
+    if (assets.ready) {
+      let frame = SPRITES.player_idle;
+      const shootActive = nowSec - player.lastShot < 0.15;
+      if (shootActive) {
+        frame = (Math.floor((nowSec * 10) % 2) === 0) ? SPRITES.player_shoot1 : SPRITES.player_shoot2;
+      } else if (player.moving) {
+        const step = Math.floor((nowSec * 5) % 3);
+        frame = step === 0 ? SPRITES.player_walk1 : step === 1 ? SPRITES.player_walk2 : SPRITES.player_walk3;
+      }
+      ctx.drawImage(
+        assets.soldier,
+        frame.x,
+        frame.y,
+        frame.w,
+        frame.h,
+        -TILE / 2,
+        -TILE / 2,
+        TILE,
+        TILE
+      );
+    } else {
+      ctx.fillStyle = "rgba(255,255,255,0.92)";
+      ctx.beginPath();
+      ctx.arc(0, 0, player.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     ctx.strokeStyle = "rgba(255,220,140,0.9)";
     ctx.lineWidth = 3;
@@ -687,6 +765,22 @@
     ctx.moveTo(10, -4);
     ctx.lineTo(22, -10);
     ctx.stroke();
+
+    if (assets.ready) {
+      const weaponIndex = (player.weaponTier - 1) % WEAPON_FRAMES.length;
+      const weapon = WEAPON_FRAMES[weaponIndex];
+      ctx.drawImage(
+        assets.weapons,
+        weapon.x,
+        weapon.y,
+        weapon.w,
+        weapon.h,
+        TILE * 0.25,
+        TILE * 0.2,
+        TILE * 0.6,
+        TILE * 0.6
+      );
+    }
 
     ctx.restore();
   }
@@ -725,16 +819,20 @@
 
   function drawPickups() {
     for (const p of pickups) {
-      ctx.fillStyle = "rgba(120,255,160,0.95)";
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      const w = 30;
+      const h = 18;
+      const x = p.x - w / 2;
+      const y = p.y - h / 2;
+      ctx.fillStyle = p.amount === 2 ? "rgba(80,160,255,0.75)" : "rgba(120,220,140,0.75)";
+      ctx.strokeStyle = "rgba(255,255,255,0.65)";
+      ctx.lineWidth = 2;
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
       ctx.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(`+${p.amount}`, p.x, p.y);
+      ctx.fillText(`+${p.amount}`, p.x, p.y + 1);
       ctx.textAlign = "left";
       ctx.textBaseline = "top";
     }
@@ -742,12 +840,18 @@
 
   function drawStatues() {
     for (const s of statues) {
-      ctx.fillStyle = "rgba(180,200,255,0.20)";
-      ctx.fillRect(s.x - s.w / 2, s.y - s.h / 2, s.w, s.h);
+      if (assets.ready) {
+        const sprite = assets[s.spriteName];
+        const size = TILE * 2;
+        ctx.drawImage(sprite, s.x - size / 2, s.y - size / 2, size, size);
+      } else {
+        ctx.fillStyle = "rgba(180,200,255,0.20)";
+        ctx.fillRect(s.x - s.w / 2, s.y - s.h / 2, s.w, s.h);
 
-      ctx.strokeStyle = "rgba(180,200,255,0.55)";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(s.x - s.w / 2, s.y - s.h / 2, s.w, s.h);
+        ctx.strokeStyle = "rgba(180,200,255,0.55)";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(s.x - s.w / 2, s.y - s.h / 2, s.w, s.h);
+      }
 
       const w = 70;
       const h = 6;
@@ -782,6 +886,7 @@
   function loop(now) {
     const dt = clamp((now - tPrev) / 1000, 0, 0.033);
     tPrev = now;
+    nowSec = now / 1000;
 
     if (running) update(dt, now);
     render();
