@@ -35,9 +35,18 @@
   <link rel="alternate" href="https://rollerguns.it/" hreflang="it" />
   <link rel="alternate" href="https://rollerguns.it/" hreflang="x-default" />
   <style>
-    html, body { margin:0; padding:0; background:#0b0f14; color:#e8eef6; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
-    body { overflow-x: hidden; }
-    canvas { display:block; width:100vw; height:100vh; touch-action:none; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: #0b0f14;
+      color: #e8eef6;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      overflow: hidden;
+      touch-action: none;
+      overscroll-behavior: none;
+    }
+    canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
     .overlay {
       position: fixed; inset: 0; display:none;
       align-items:center; justify-content:center; flex-direction:column;
@@ -142,35 +151,49 @@
   const finalStats = document.getElementById("finalStats");
   const restartBtn = document.getElementById("restartBtn");
 
-  // ----- Utilities
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const lerp = (a, b, t) => a + (b - a) * t;
   const rand = (a, b) => a + Math.random() * (b - a);
 
-  // ----- Responsive size
-  let W = 0, H = 0, DPR = 1;
+  let W = 0;
+  let H = 0;
+  let DPR = 1;
   function resize() {
     DPR = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
-    W = Math.floor(window.innerWidth * DPR);
-    H = Math.floor(window.innerHeight * DPR);
-    canvas.width = W;
-    canvas.height = H;
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   }
   window.addEventListener("resize", resize, { passive:true });
   resize();
 
-  // ----- Lanes
   function laneX(i) {
     const margin = W * 0.14;
     const usable = W - margin * 2;
     return margin + usable * (i / 2);
   }
 
-  // ----- Game state
+  function laneXAtY(lane, y) {
+    const bottomMargin = W * 0.14;
+    const topMargin = W * 0.32;
+    const t = clamp(y / H, 0, 1);
+    const margin = bottomMargin + (topMargin - bottomMargin) * (1 - t);
+    const usable = W - margin * 2;
+    return margin + usable * (lane / 2);
+  }
+
+  function drawLaneX(lane, y, fallbackX) {
+    if (lane === 0 || lane === 1 || lane === 2) {
+      return laneXAtY(lane, y);
+    }
+    return fallbackX;
+  }
+
   let tPrev = performance.now();
   let running = true;
 
-  // Player stats
   const player = {
     lane: 1,
     laneFrom: 1,
@@ -191,7 +214,7 @@
     hp: 100,
 
     troops: 5,
-    troopHPPer: 18,
+    troopHPPerUnit: 18,
     troopPool: 5 * 18,
 
     weaponTier: 1,
@@ -209,7 +232,7 @@
   }
 
   function recalcTroopPool() {
-    player.troopPool = player.troops * player.troopHPPer;
+    player.troopPool = player.troops * player.troopHPPerUnit;
     if (player.troops <= 0) player.troopPool = 0;
   }
 
@@ -224,10 +247,8 @@
   let nextEnemyIn = 0;
   let nextPickupIn = 2.0;
   let nextStatueIn = 4.5;
-
   let roadOffset = 0;
 
-  // ----- Touch input (swipe)
   let touchStartX = null;
   let touchStartY = null;
   let touchStartTime = null;
@@ -258,7 +279,8 @@
     const dy = t.clientY - touchStartY;
     const dt = performance.now() - touchStartTime;
 
-    const absX = Math.abs(dx), absY = Math.abs(dy);
+    const absX = Math.abs(dx);
+    const absY = Math.abs(dy);
     const minDist = 40;
     const maxTime = 450;
     if (dt <= maxTime && absX >= minDist && absX > absY * 1.15) {
@@ -273,7 +295,6 @@
     if (e.code === "ArrowRight" || e.code === "KeyD") tryMoveLane(1);
   });
 
-  // ----- Spawning logic
   function enemyTypeByWave(idx) {
     const mod12 = idx % 12;
     if (mod12 === 11) return "final";
@@ -287,7 +308,10 @@
     const baseSpeed = 140 + difficulty * 10;
     const baseHP = 22 + difficulty * 4;
 
-    let hp, speed, dmgPerSec, radius;
+    let hp;
+    let speed;
+    let dmgPerSec;
+    let radius;
     if (type === "grunt") {
       hp = baseHP;
       speed = baseSpeed + rand(-10, 25);
@@ -319,8 +343,7 @@
       hpMax: hp,
       hp,
       speed,
-      dmgPerSec,
-      alive: true
+      dmgPerSec
     });
   }
 
@@ -351,13 +374,10 @@
       h: 70,
       speed: 120 + difficulty * 6,
       hpMax: hp,
-      hp,
-      tierReward: nextTier,
-      alive: true
+      hp
     });
   }
 
-  // ----- Combat / XP / Leveling
   function addXP(x) {
     player.xp += x;
     while (player.xp >= player.xpToNext) {
@@ -365,10 +385,8 @@
       player.level += 1;
       player.hpMax += 12;
       player.hp = Math.min(player.hpMax, player.hp + 18);
-
-      player.troopHPPer += 1;
+      player.troopHPPerUnit += 1;
       recalcTroopPool();
-
       player.xpToNext = Math.round(player.xpToNext * 1.18 + 6);
     }
   }
@@ -376,7 +394,7 @@
   function damageTroops(amount) {
     if (player.troops > 0 && player.troopPool > 0) {
       player.troopPool = Math.max(0, player.troopPool - amount);
-      const newTroops = Math.ceil(player.troopPool / player.troopHPPer);
+      const newTroops = Math.ceil(player.troopPool / player.troopHPPerUnit);
       player.troops = Math.max(0, newTroops);
       if (player.troops === 0) player.troopPool = 0;
     } else {
@@ -400,7 +418,6 @@
     });
   }
 
-  // ----- Game Over / Restart
   function endGame() {
     running = false;
     overlay.style.display = "flex";
@@ -438,7 +455,7 @@
     player.hp = 100;
 
     player.troops = 5;
-    player.troopHPPer = 18;
+    player.troopHPPerUnit = 18;
     recalcTroopPool();
 
     player.weaponTier = 1;
@@ -453,7 +470,6 @@
   restartBtn.addEventListener("click", resetGame);
   overlay.addEventListener("touchstart", (e) => { e.preventDefault(); }, { passive:false });
 
-  // ----- Update loop
   function update(dt, now) {
     const speedMeters = 18 + difficulty * 0.25;
     meters += speedMeters * dt;
@@ -483,9 +499,9 @@
     nextEnemyIn -= dt;
     if (nextEnemyIn <= 0) {
       spawnEnemy();
-      const base = 0.85;
-      const scaled = clamp(base - difficulty * 0.015, 0.30, 0.85);
-      nextEnemyIn = scaled + rand(-0.05, 0.08);
+      const baseInterval = 0.85;
+      const interval = clamp(baseInterval - difficulty * 0.015, 0.30, 0.85);
+      nextEnemyIn = interval + rand(-0.05, 0.08);
     }
 
     nextPickupIn -= dt;
@@ -529,7 +545,10 @@
       for (let j = bullets.length - 1; j >= 0; j--) {
         const b = bullets[j];
         if (b.lane !== 2) continue;
-        const left = s.x - s.w/2, right = s.x + s.w/2, top = s.y - s.h/2, bot = s.y + s.h/2;
+        const left = s.x - s.w / 2;
+        const right = s.x + s.w / 2;
+        const top = s.y - s.h / 2;
+        const bot = s.y + s.h / 2;
         if (b.x > left - b.r && b.x < right + b.r && b.y > top - b.r && b.y < bot + b.r) {
           s.hp -= b.dmg;
           bullets.splice(j, 1);
@@ -554,9 +573,10 @@
       for (let j = bullets.length - 1; j >= 0; j--) {
         const b = bullets[j];
         if (b.lane !== 1) continue;
-        const dx = b.x - e.x, dy = b.y - e.y;
-        const rr = (b.r + e.r);
-        if (dx*dx + dy*dy <= rr*rr) {
+        const dx = b.x - e.x;
+        const dy = b.y - e.y;
+        const rr = b.r + e.r;
+        if (dx * dx + dy * dy <= rr * rr) {
           e.hp -= b.dmg;
           bullets.splice(j, 1);
           if (e.hp <= 0) {
@@ -582,51 +602,63 @@
     if (player.hp <= 0) endGame();
   }
 
-  // ----- Rendering
   function drawRoad() {
     ctx.fillStyle = "#0b0f17";
     ctx.fillRect(0, 0, W, H);
 
-    const roadLeft = W * 0.10;
-    const roadRight = W * 0.90;
-    const roadTop = 0;
-    const roadBot = H;
+    const horizonY = H * 0.18;
+    const roadBottomLeft = W * 0.08;
+    const roadBottomRight = W * 0.92;
+    const roadTopLeft = W * 0.34;
+    const roadTopRight = W * 0.66;
 
     ctx.fillStyle = "#10182a";
-    ctx.fillRect(roadLeft, roadTop, roadRight - roadLeft, roadBot - roadTop);
+    ctx.beginPath();
+    ctx.moveTo(roadBottomLeft, H);
+    ctx.lineTo(roadBottomRight, H);
+    ctx.lineTo(roadTopRight, horizonY);
+    ctx.lineTo(roadTopLeft, horizonY);
+    ctx.closePath();
+    ctx.fill();
 
     ctx.strokeStyle = "rgba(255,255,255,0.12)";
-    ctx.lineWidth = 2 * DPR;
+    ctx.lineWidth = 2;
 
-    const x0 = laneX(0), x1 = laneX(1), x2 = laneX(2);
-    const sep1 = (x0 + x1) / 2, sep2 = (x1 + x2) / 2;
+    const sep0Bottom = (laneX(0) + laneX(1)) / 2;
+    const sep1Bottom = (laneX(1) + laneX(2)) / 2;
+    const sep0Top = (laneXAtY(0, horizonY) + laneXAtY(1, horizonY)) / 2;
+    const sep1Top = (laneXAtY(1, horizonY) + laneXAtY(2, horizonY)) / 2;
 
-    function dashedLine(x) {
+    function dashedPerspectiveLine(xBottom, xTop) {
       ctx.beginPath();
-      const dash = 34 * DPR;
-      const gap = 26 * DPR;
-      let y = -roadOffset * DPR;
-      while (y < H + dash) {
-        ctx.moveTo(x, y);
-        ctx.lineTo(x, y + dash);
-        y += dash + gap;
+      const dash = 34;
+      const gap = 26;
+      let y = H - (roadOffset % (dash + gap));
+      while (y > horizonY) {
+        const t0 = clamp((H - y) / (H - horizonY), 0, 1);
+        const t1 = clamp((H - (y - dash)) / (H - horizonY), 0, 1);
+        const x0 = xBottom + (xTop - xBottom) * t0;
+        const x1 = xBottom + (xTop - xBottom) * t1;
+        ctx.moveTo(x0, y);
+        ctx.lineTo(x1, y - dash);
+        y -= dash + gap;
       }
       ctx.stroke();
     }
 
-    dashedLine(sep1);
-    dashedLine(sep2);
+    dashedPerspectiveLine(sep0Bottom, sep0Top);
+    dashedPerspectiveLine(sep1Bottom, sep1Top);
 
-    ctx.fillStyle = "rgba(255,255,255,0.07)";
-    ctx.fillRect(roadLeft, 0, roadRight-roadLeft, 44*DPR);
+    ctx.fillStyle = "rgba(255,255,255,0.06)";
+    ctx.fillRect(roadTopLeft, horizonY - 32, roadTopRight - roadTopLeft, 32);
   }
 
   function drawHUD() {
-    const pad = 12 * DPR;
+    const pad = 12;
     const barW = W * 0.42;
-    const barH = 10 * DPR;
+    const barH = 10;
 
-    ctx.font = `${14 * DPR}px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+    ctx.font = "14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
     ctx.textBaseline = "top";
 
     ctx.fillStyle = "rgba(255,255,255,0.18)";
@@ -634,54 +666,67 @@
     ctx.fillStyle = "rgba(255,70,70,0.85)";
     ctx.fillRect(pad, pad, barW * (player.hp / player.hpMax), barH);
     ctx.fillStyle = "rgba(255,255,255,0.92)";
-    ctx.fillText(`PS ${Math.ceil(player.hp)}/${player.hpMax}`, pad, pad + 14 * DPR);
+    ctx.fillText(`PS ${Math.ceil(player.hp)}/${player.hpMax}`, pad, pad + 14);
 
-    const troopY = pad + 38 * DPR;
+    const troopY = pad + 38;
     ctx.fillStyle = "rgba(255,255,255,0.18)";
     ctx.fillRect(pad, troopY, barW, barH);
-    const troopMax = Math.max(1, player.troops * player.troopHPPer);
+    const troopMax = Math.max(1, player.troops * player.troopHPPerUnit);
     const troopFrac = troopMax ? (player.troopPool / troopMax) : 0;
     ctx.fillStyle = "rgba(80,200,255,0.85)";
     ctx.fillRect(pad, troopY, barW * troopFrac, barH);
     ctx.fillStyle = "rgba(255,255,255,0.92)";
-    ctx.fillText(`Truppe N=${player.troops}`, pad, troopY + 14 * DPR);
+    ctx.fillText(`Truppe N=${player.troops}`, pad, troopY + 14);
 
-    const xpY = pad + 64 * DPR;
+    const xpY = pad + 64;
     ctx.fillStyle = "rgba(255,255,255,0.18)";
     ctx.fillRect(pad, xpY, barW, barH);
     ctx.fillStyle = "rgba(140,255,120,0.85)";
     ctx.fillRect(pad, xpY, barW * (player.xp / player.xpToNext), barH);
     ctx.fillStyle = "rgba(255,255,255,0.92)";
-    ctx.fillText(`LV ${player.level}  XP ${Math.floor(player.xp)}/${player.xpToNext}`, pad, xpY + 14 * DPR);
+    ctx.fillText(`LV ${player.level}  XP ${Math.floor(player.xp)}/${player.xpToNext}`, pad, xpY + 14);
 
     const rightX = W - pad;
     ctx.textAlign = "right";
     ctx.fillStyle = "rgba(255,255,255,0.92)";
     ctx.fillText(`Arma Tier ${player.weaponTier}`, rightX, pad);
-    ctx.fillText(`DMG ${player.dmg} | ROF ${player.fireRate.toFixed(1)}/s`, rightX, pad + 18 * DPR);
-    ctx.fillText(`Metri ${Math.floor(meters)}`, rightX, pad + 36 * DPR);
+    ctx.fillText(`DMG ${player.dmg} | ROF ${player.fireRate.toFixed(1)}/s`, rightX, pad + 18);
+    ctx.fillText(`Metri ${Math.floor(meters)}`, rightX, pad + 36);
     ctx.textAlign = "left";
   }
 
   function drawPlayer() {
     ctx.save();
-    ctx.translate(player.x, player.y);
+    const scale = clamp(0.7 + (player.y / H) * 0.5, 0.7, 1.1);
+    const drawX = drawLaneX(player.lane, player.y, player.x);
+    ctx.translate(drawX, player.y);
+    ctx.scale(scale, scale);
 
     ctx.fillStyle = "rgba(0,0,0,0.35)";
     ctx.beginPath();
-    ctx.ellipse(0, 26 * DPR, 18 * DPR, 8 * DPR, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 26, 18, 8, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = player.moving ? "rgba(255,255,255,0.75)" : "rgba(255,255,255,0.92)";
+    ctx.fillStyle = "rgba(40,50,70,0.85)";
     ctx.beginPath();
-    ctx.arc(0, 0, player.r * DPR, 0, Math.PI * 2);
+    ctx.arc(0, -6, player.r * 0.75, Math.PI, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = player.moving ? "rgba(200,220,255,0.7)" : "rgba(220,235,255,0.9)";
+    ctx.beginPath();
+    ctx.arc(0, 4, player.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(30,40,60,0.9)";
+    ctx.beginPath();
+    ctx.arc(0, -8, player.r * 0.55, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.strokeStyle = "rgba(255,220,140,0.9)";
-    ctx.lineWidth = 3 * DPR;
+    ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(10 * DPR, -4 * DPR);
-    ctx.lineTo(22 * DPR, -10 * DPR);
+    ctx.moveTo(6, -8);
+    ctx.lineTo(18, -18);
     ctx.stroke();
 
     ctx.restore();
@@ -690,14 +735,16 @@
   function drawBullets() {
     ctx.fillStyle = "rgba(255,220,140,0.95)";
     for (const b of bullets) {
+      const drawX = drawLaneX(b.lane, b.y, b.x);
       ctx.beginPath();
-      ctx.arc(b.x, b.y, b.r * DPR, 0, Math.PI * 2);
+      ctx.arc(drawX, b.y, b.r, 0, Math.PI * 2);
       ctx.fill();
     }
   }
 
   function drawEnemies() {
     for (const e of enemies) {
+      const drawX = drawLaneX(e.lane, e.y, e.x);
       let col = "rgba(255,90,120,0.95)";
       if (e.type === "miniboss") col = "rgba(255,160,80,0.95)";
       if (e.type === "boss") col = "rgba(210,120,255,0.95)";
@@ -705,13 +752,13 @@
 
       ctx.fillStyle = col;
       ctx.beginPath();
-      ctx.arc(e.x, e.y, e.r * DPR, 0, Math.PI * 2);
+      ctx.arc(drawX, e.y, e.r, 0, Math.PI * 2);
       ctx.fill();
 
-      const w = 64 * DPR;
-      const h = 6 * DPR;
-      const x = e.x - w / 2;
-      const y = e.y - (e.r + 18) * DPR;
+      const w = 64;
+      const h = 6;
+      const x = drawX - w / 2;
+      const y = e.y - (e.r + 18);
       ctx.fillStyle = "rgba(255,255,255,0.14)";
       ctx.fillRect(x, y, w, h);
       ctx.fillStyle = "rgba(255,255,255,0.78)";
@@ -721,16 +768,17 @@
 
   function drawPickups() {
     for (const p of pickups) {
+      const drawX = drawLaneX(p.lane, p.y, p.x);
       ctx.fillStyle = "rgba(120,255,160,0.95)";
       ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r * DPR, 0, Math.PI * 2);
+      ctx.arc(drawX, p.y, p.r, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.fillStyle = "rgba(0,0,0,0.55)";
-      ctx.font = `${12 * DPR}px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+      ctx.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(`+${p.amount}`, p.x, p.y);
+      ctx.fillText(`+${p.amount}`, drawX, p.y);
       ctx.textAlign = "left";
       ctx.textBaseline = "top";
     }
@@ -738,27 +786,29 @@
 
   function drawStatues() {
     for (const s of statues) {
+      const drawX = drawLaneX(s.lane, s.y, s.x);
       ctx.fillStyle = "rgba(180,200,255,0.20)";
-      ctx.fillRect((s.x - s.w / 2) * DPR, (s.y - s.h / 2) * DPR, s.w * DPR, s.h * DPR);
+      ctx.fillRect(drawX - s.w / 2, s.y - s.h / 2, s.w, s.h);
 
       ctx.strokeStyle = "rgba(180,200,255,0.55)";
-      ctx.lineWidth = 2 * DPR;
-      ctx.strokeRect((s.x - s.w / 2) * DPR, (s.y - s.h / 2) * DPR, s.w * DPR, s.h * DPR);
+      ctx.lineWidth = 2;
+      ctx.strokeRect(drawX - s.w / 2, s.y - s.h / 2, s.w, s.h);
 
-      const w = 70 * DPR, h = 6 * DPR;
-      const x = (s.x - w / (2 * DPR)) * DPR;
-      const y = (s.y - s.h / 2 - 16) * DPR;
+      const w = 70;
+      const h = 6;
+      const x = drawX - w / 2;
+      const y = s.y - s.h / 2 - 16;
       ctx.fillStyle = "rgba(255,255,255,0.14)";
       ctx.fillRect(x, y, w, h);
       ctx.fillStyle = "rgba(120,180,255,0.85)";
       ctx.fillRect(x, y, w * (s.hp / s.hpMax), h);
 
       ctx.fillStyle = "rgba(255,255,255,0.75)";
-      ctx.font = `${11 * DPR}px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+      ctx.font = "11px system-ui, -apple-system, Segoe UI, Roboto, Arial";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("STATUA", s.x * DPR, (s.y - 6) * DPR);
-      ctx.fillText(`Tier → ${clamp(player.weaponTier + 1, 1, 20)}`, s.x * DPR, (s.y + 10) * DPR);
+      ctx.fillText("STATUA", drawX, s.y - 6);
+      ctx.fillText(`Tier → ${clamp(player.weaponTier + 1, 1, 20)}`, drawX, s.y + 10);
       ctx.textAlign = "left";
       ctx.textBaseline = "top";
     }
