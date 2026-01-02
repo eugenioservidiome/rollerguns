@@ -1,0 +1,842 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <!-- Primary SEO -->
+  <title>RollerGuns.it — Gioco HTML5 a 3 corsie con truppe, boss e statue</title>
+  <meta name="description" content="RollerGuns.it è un gioco HTML5 a 3 corsie: raccogli truppe, affronta nemici e boss, distruggi statue per ottenere armi sempre più forti. Gioca subito nel browser." />
+  <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1" />
+  <link rel="canonical" href="https://rollerguns.it/" />
+
+  <!-- Mobile / PWA-ish basics -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#0b0f14" />
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+  <!-- Open Graph (Facebook/LinkedIn/WhatsApp) -->
+  <meta property="og:site_name" content="RollerGuns.it" />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://rollerguns.it/" />
+  <meta property="og:title" content="RollerGuns.it — 3 corsie, truppe, boss e armi leggendarie" />
+  <meta property="og:description" content="Gioca subito: potenziamenti a sinistra, nemici al centro, statue a destra. Spara solo da fermo e scala i tier arma fino al boss finale." />
+  <meta property="og:image" content="https://rollerguns.it/og/rollerguns-og-1200x630.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:locale" content="it_IT" />
+
+  <!-- Twitter/X -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="RollerGuns.it — Gioco HTML5 a 3 corsie" />
+  <meta name="twitter:description" content="Truppe, boss, statue e armi fortissime. Gioca nel browser." />
+  <meta name="twitter:image" content="https://rollerguns.it/og/rollerguns-og-1200x630.png" />
+
+  <!-- Hreflang -->
+  <link rel="alternate" href="https://rollerguns.it/" hreflang="it" />
+  <link rel="alternate" href="https://rollerguns.it/" hreflang="x-default" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: #0b0f14;
+      color: #e8eef6;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      overflow: hidden;
+      touch-action: none;
+      overscroll-behavior: none;
+    }
+    canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+    .overlay {
+      position: fixed; inset: 0; display:none;
+      align-items:center; justify-content:center; flex-direction:column;
+      background: rgba(0,0,0,.55); color:#fff; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      padding: 24px; gap: 12px; text-align:center;
+      z-index: 5;
+    }
+    .overlay button {
+      border:0; border-radius:14px; padding:12px 16px; font-size:16px;
+      background:#2f6bff; color:#fff;
+    }
+    .hint {
+      position: fixed; left: 12px; right: 12px; bottom: 12px;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      font-size: 12px; color: rgba(255,255,255,.75);
+      display:flex; justify-content:space-between; gap: 10px;
+      pointer-events:none;
+      z-index: 4;
+    }
+    .hint span { background: rgba(255,255,255,.06); padding: 8px 10px; border-radius: 12px; }
+    .seo {
+      max-width: 980px;
+      margin: 18px auto 50px;
+      padding: 0 16px;
+      color: rgba(232,238,246,0.9);
+    }
+    .seo h1, .seo h2 { color: #ffffff; }
+    .seo ul { padding-left: 20px; }
+  </style>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "name": "RollerGuns.it",
+    "url": "https://rollerguns.it/",
+    "inLanguage": "it-IT",
+    "description": "Gioco HTML5 a 3 corsie con truppe, nemici, boss e statue che sbloccano armi sempre più forti.",
+    "publisher": {
+      "@type": "Organization",
+      "name": "RollerGuns.it",
+      "url": "https://rollerguns.it/"
+    }
+  }
+  </script>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "name": "RollerGuns.it — Gioco HTML5 a 3 corsie",
+    "url": "https://rollerguns.it/",
+    "inLanguage": "it-IT",
+    "description": "Raccogli truppe, affronta boss e distruggi statue per ottenere armi leggendarie. Gioca subito nel browser."
+  }
+  </script>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div class="overlay" id="gameover">
+  <h2 style="margin:0;">Game Over</h2>
+  <div id="finalStats" style="opacity:.9;"></div>
+  <button id="restartBtn">Ricomincia</button>
+</div>
+
+<div class="hint">
+  <span>Swipe ← / → per cambiare corsia</span>
+  <span>Auto-sparo quando sei fermo</span>
+</div>
+
+<main class="seo">
+  <h1>RollerGuns.it</h1>
+  <p>
+    RollerGuns è un gioco HTML5 a 3 corsie: a sinistra trovi potenziamenti truppe (+1/+2),
+    al centro arrivano nemici e boss, a destra statue con molta vita che, se distrutte,
+    sbloccano armi sempre più forti.
+  </p>
+
+  <h2>Come si gioca</h2>
+  <ul>
+    <li>Cambia corsia per scegliere potenziamenti, combattere o puntare alle statue.</li>
+    <li>Spari solo quando sei fermo: muoversi ti espone agli attacchi.</li>
+    <li>Accumula XP e livelli, potenzia le truppe e affronta il boss finale a fasi.</li>
+  </ul>
+
+  <h2>Caratteristiche</h2>
+  <ul>
+    <li>Progressione armi (spread, piercing, laser, crit)</li>
+    <li>Truppe fisiche che sparano con te</li>
+    <li>Boss e boss finale con fasi</li>
+    <li>Giocabile su desktop e mobile</li>
+  </ul>
+</main>
+
+<script>
+(() => {
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d", { alpha: false });
+
+  const overlay = document.getElementById("gameover");
+  const finalStats = document.getElementById("finalStats");
+  const restartBtn = document.getElementById("restartBtn");
+
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const rand = (a, b) => a + Math.random() * (b - a);
+
+  let W = 0;
+  let H = 0;
+  let DPR = 1;
+  function resize() {
+    DPR = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener("resize", resize, { passive:true });
+  resize();
+
+  function laneX(i) {
+    const margin = W * 0.14;
+    const usable = W - margin * 2;
+    return margin + usable * (i / 2);
+  }
+
+  function laneXAtY(lane, y) {
+    const bottomMargin = W * 0.14;
+    const topMargin = W * 0.32;
+    const t = clamp(y / H, 0, 1);
+    const margin = bottomMargin + (topMargin - bottomMargin) * (1 - t);
+    const usable = W - margin * 2;
+    return margin + usable * (lane / 2);
+  }
+
+  function drawLaneX(lane, y, fallbackX) {
+    if (lane === 0 || lane === 1 || lane === 2) {
+      return laneXAtY(lane, y);
+    }
+    return fallbackX;
+  }
+
+  let tPrev = performance.now();
+  let running = true;
+
+  const player = {
+    lane: 1,
+    laneFrom: 1,
+    laneTo: 1,
+    laneT: 1,
+    laneMoveDur: 0.22,
+    moving: false,
+
+    x: 0,
+    y: 0,
+    r: 18,
+
+    level: 1,
+    xp: 0,
+    xpToNext: 30,
+
+    hpMax: 100,
+    hp: 100,
+
+    troops: 5,
+    troopHPPerUnit: 18,
+    troopPool: 5 * 18,
+
+    weaponTier: 1,
+    dmg: 10,
+    fireRate: 6,
+    bulletSpeed: 800,
+    lastShot: 0
+  };
+
+  function recalcWeapon() {
+    const tier = player.weaponTier;
+    player.dmg = Math.round(8 + tier * 6 + Math.pow(tier, 1.15));
+    player.fireRate = clamp(5 + tier * 0.8, 5, 12);
+    player.bulletSpeed = 820 + tier * 25;
+  }
+
+  function recalcTroopPool() {
+    player.troopPool = player.troops * player.troopHPPerUnit;
+    if (player.troops <= 0) player.troopPool = 0;
+  }
+
+  const bullets = [];
+  const enemies = [];
+  const pickups = [];
+  const statues = [];
+
+  let meters = 0;
+  let difficulty = 1;
+  let waveIndex = 0;
+  let nextEnemyIn = 0;
+  let nextPickupIn = 2.0;
+  let nextStatueIn = 4.5;
+  let roadOffset = 0;
+
+  let touchStartX = null;
+  let touchStartY = null;
+  let touchStartTime = null;
+
+  function tryMoveLane(dir) {
+    if (player.moving) return;
+    const target = clamp(player.lane + dir, 0, 2);
+    if (target === player.lane) return;
+
+    player.laneFrom = player.lane;
+    player.laneTo = target;
+    player.laneT = 0;
+    player.moving = true;
+  }
+
+  window.addEventListener("touchstart", (e) => {
+    if (!running) return;
+    const t = e.changedTouches[0];
+    touchStartX = t.clientX;
+    touchStartY = t.clientY;
+    touchStartTime = performance.now();
+  }, { passive:true });
+
+  window.addEventListener("touchend", (e) => {
+    if (!running) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStartX;
+    const dy = t.clientY - touchStartY;
+    const dt = performance.now() - touchStartTime;
+
+    const absX = Math.abs(dx);
+    const absY = Math.abs(dy);
+    const minDist = 40;
+    const maxTime = 450;
+    if (dt <= maxTime && absX >= minDist && absX > absY * 1.15) {
+      tryMoveLane(dx > 0 ? +1 : -1);
+    }
+  }, { passive:true });
+
+  document.body.addEventListener("touchmove", (e) => e.preventDefault(), { passive:false });
+
+  window.addEventListener("keydown", (e) => {
+    if (e.code === "ArrowLeft" || e.code === "KeyA") tryMoveLane(-1);
+    if (e.code === "ArrowRight" || e.code === "KeyD") tryMoveLane(1);
+  });
+
+  function enemyTypeByWave(idx) {
+    const mod12 = idx % 12;
+    if (mod12 === 11) return "final";
+    if (mod12 === 6) return "boss";
+    if (mod12 === 3 || mod12 === 9) return "miniboss";
+    return "grunt";
+  }
+
+  function spawnEnemy() {
+    const type = enemyTypeByWave(waveIndex++);
+    const baseSpeed = 140 + difficulty * 10;
+    const baseHP = 22 + difficulty * 4;
+
+    let hp;
+    let speed;
+    let dmgPerSec;
+    let radius;
+    if (type === "grunt") {
+      hp = baseHP;
+      speed = baseSpeed + rand(-10, 25);
+      dmgPerSec = 14 + difficulty * 1.2;
+      radius = 16;
+    } else if (type === "miniboss") {
+      hp = baseHP * 5;
+      speed = baseSpeed * 0.9;
+      dmgPerSec = 26 + difficulty * 1.6;
+      radius = 22;
+    } else if (type === "boss") {
+      hp = baseHP * 12;
+      speed = baseSpeed * 0.8;
+      dmgPerSec = 44 + difficulty * 2.2;
+      radius = 28;
+    } else {
+      hp = baseHP * 20;
+      speed = baseSpeed * 0.75;
+      dmgPerSec = 62 + difficulty * 2.8;
+      radius = 34;
+    }
+
+    enemies.push({
+      lane: 1,
+      x: laneX(1),
+      y: -80,
+      r: radius,
+      type,
+      hpMax: hp,
+      hp,
+      speed,
+      dmgPerSec
+    });
+  }
+
+  function spawnPickup() {
+    const amount = Math.random() < 0.65 ? 1 : 2;
+    pickups.push({
+      lane: 0,
+      x: laneX(0),
+      y: -60,
+      r: 14,
+      amount,
+      speed: 170 + difficulty * 8
+    });
+  }
+
+  function statueHPForTier(tier) {
+    return Math.round(160 + tier * 90 + difficulty * 18);
+  }
+
+  function spawnStatue() {
+    const nextTier = clamp(player.weaponTier, 1, 12);
+    const hp = statueHPForTier(nextTier);
+    statues.push({
+      lane: 2,
+      x: laneX(2),
+      y: -90,
+      w: 46,
+      h: 70,
+      speed: 120 + difficulty * 6,
+      hpMax: hp,
+      hp
+    });
+  }
+
+  function addXP(x) {
+    player.xp += x;
+    while (player.xp >= player.xpToNext) {
+      player.xp -= player.xpToNext;
+      player.level += 1;
+      player.hpMax += 12;
+      player.hp = Math.min(player.hpMax, player.hp + 18);
+      player.troopHPPerUnit += 1;
+      recalcTroopPool();
+      player.xpToNext = Math.round(player.xpToNext * 1.18 + 6);
+    }
+  }
+
+  function damageTroops(amount) {
+    if (player.troops > 0 && player.troopPool > 0) {
+      player.troopPool = Math.max(0, player.troopPool - amount);
+      const newTroops = Math.ceil(player.troopPool / player.troopHPPerUnit);
+      player.troops = Math.max(0, newTroops);
+      if (player.troops === 0) player.troopPool = 0;
+    } else {
+      player.hp = Math.max(0, player.hp - amount);
+    }
+  }
+
+  function shoot(now) {
+    if (player.moving) return;
+    const cooldown = 1 / player.fireRate;
+    if (now - player.lastShot < cooldown) return;
+    player.lastShot = now;
+
+    bullets.push({
+      lane: player.lane,
+      x: player.x,
+      y: player.y - player.r - 6,
+      r: 6,
+      vy: -player.bulletSpeed,
+      dmg: player.dmg
+    });
+  }
+
+  function endGame() {
+    running = false;
+    overlay.style.display = "flex";
+    finalStats.innerHTML =
+      `Metri: <b>${Math.floor(meters)}</b><br/>` +
+      `Livello: <b>${player.level}</b><br/>` +
+      `Arma Tier: <b>${player.weaponTier}</b>`;
+  }
+
+  function resetGame() {
+    bullets.length = 0;
+    enemies.length = 0;
+    pickups.length = 0;
+    statues.length = 0;
+
+    meters = 0;
+    difficulty = 1;
+    waveIndex = 0;
+    nextEnemyIn = 0.6;
+    nextPickupIn = 2.0;
+    nextStatueIn = 4.0;
+    roadOffset = 0;
+
+    player.lane = 1;
+    player.laneFrom = 1;
+    player.laneTo = 1;
+    player.laneT = 1;
+    player.moving = false;
+
+    player.level = 1;
+    player.xp = 0;
+    player.xpToNext = 30;
+
+    player.hpMax = 100;
+    player.hp = 100;
+
+    player.troops = 5;
+    player.troopHPPerUnit = 18;
+    recalcTroopPool();
+
+    player.weaponTier = 1;
+    recalcWeapon();
+    player.lastShot = 0;
+
+    overlay.style.display = "none";
+    running = true;
+    tPrev = performance.now();
+  }
+
+  restartBtn.addEventListener("click", resetGame);
+  overlay.addEventListener("touchstart", (e) => { e.preventDefault(); }, { passive:false });
+
+  function update(dt, now) {
+    const speedMeters = 18 + difficulty * 0.25;
+    meters += speedMeters * dt;
+    difficulty = 1 + meters / 220;
+
+    const targetX = laneX(player.laneTo);
+    const curX = laneX(player.laneFrom);
+
+    if (player.moving) {
+      player.laneT = Math.min(1, player.laneT + dt / player.laneMoveDur);
+      const eased = 1 - Math.pow(1 - player.laneT, 3);
+      player.x = lerp(curX, targetX, eased);
+      if (player.laneT >= 1) {
+        player.moving = false;
+        player.lane = player.laneTo;
+        player.laneFrom = player.lane;
+        player.laneT = 1;
+      }
+    } else {
+      player.x = laneX(player.lane);
+    }
+
+    player.y = H * 0.82;
+
+    shoot(now / 1000);
+
+    nextEnemyIn -= dt;
+    if (nextEnemyIn <= 0) {
+      spawnEnemy();
+      const baseInterval = 0.85;
+      const interval = clamp(baseInterval - difficulty * 0.015, 0.30, 0.85);
+      nextEnemyIn = interval + rand(-0.05, 0.08);
+    }
+
+    nextPickupIn -= dt;
+    if (nextPickupIn <= 0) {
+      spawnPickup();
+      nextPickupIn = rand(2.2, 3.8);
+    }
+
+    nextStatueIn -= dt;
+    if (nextStatueIn <= 0) {
+      spawnStatue();
+      nextStatueIn = rand(5.0, 8.0);
+    }
+
+    roadOffset = (roadOffset + (240 + difficulty * 12) * dt) % 60;
+
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      b.y += b.vy * dt;
+      if (b.y < -40) bullets.splice(i, 1);
+    }
+
+    for (let i = pickups.length - 1; i >= 0; i--) {
+      const p = pickups[i];
+      p.y += p.speed * dt;
+
+      if (p.lane === player.lane && Math.abs(p.y - player.y) < 36 && !player.moving) {
+        player.troops += p.amount;
+        recalcTroopPool();
+        addXP(6 * p.amount);
+        pickups.splice(i, 1);
+        continue;
+      }
+      if (p.y > H + 80) pickups.splice(i, 1);
+    }
+
+    for (let i = statues.length - 1; i >= 0; i--) {
+      const s = statues[i];
+      s.y += s.speed * dt;
+
+      for (let j = bullets.length - 1; j >= 0; j--) {
+        const b = bullets[j];
+        if (b.lane !== 2) continue;
+        const left = s.x - s.w / 2;
+        const right = s.x + s.w / 2;
+        const top = s.y - s.h / 2;
+        const bot = s.y + s.h / 2;
+        if (b.x > left - b.r && b.x < right + b.r && b.y > top - b.r && b.y < bot + b.r) {
+          s.hp -= b.dmg;
+          bullets.splice(j, 1);
+          if (s.hp <= 0) {
+            player.weaponTier = clamp(player.weaponTier + 1, 1, 20);
+            recalcWeapon();
+            addXP(20 + player.weaponTier * 2);
+            statues.splice(i, 1);
+          }
+          break;
+        }
+      }
+
+      if (i < statues.length && s.y > H + 120) statues.splice(i, 1);
+    }
+
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const e = enemies[i];
+      e.y += e.speed * dt;
+      e.x = laneX(1);
+
+      for (let j = bullets.length - 1; j >= 0; j--) {
+        const b = bullets[j];
+        if (b.lane !== 1) continue;
+        const dx = b.x - e.x;
+        const dy = b.y - e.y;
+        const rr = b.r + e.r;
+        if (dx * dx + dy * dy <= rr * rr) {
+          e.hp -= b.dmg;
+          bullets.splice(j, 1);
+          if (e.hp <= 0) {
+            const base = e.type === "grunt" ? 10 :
+              e.type === "miniboss" ? 45 :
+                e.type === "boss" ? 110 : 180;
+            addXP(Math.round(base + difficulty * 2));
+            enemies.splice(i, 1);
+          }
+          break;
+        }
+      }
+
+      const contactY = player.y - 70;
+      if (i < enemies.length && e.y >= contactY) {
+        damageTroops(e.dmgPerSec * dt);
+        e.y = contactY;
+      }
+
+      if (i < enemies.length && e.y > H + 140) enemies.splice(i, 1);
+    }
+
+    if (player.hp <= 0) endGame();
+  }
+
+  function drawRoad() {
+    ctx.fillStyle = "#0b0f17";
+    ctx.fillRect(0, 0, W, H);
+
+    const horizonY = H * 0.18;
+    const roadBottomLeft = W * 0.08;
+    const roadBottomRight = W * 0.92;
+    const roadTopLeft = W * 0.34;
+    const roadTopRight = W * 0.66;
+
+    ctx.fillStyle = "#10182a";
+    ctx.beginPath();
+    ctx.moveTo(roadBottomLeft, H);
+    ctx.lineTo(roadBottomRight, H);
+    ctx.lineTo(roadTopRight, horizonY);
+    ctx.lineTo(roadTopLeft, horizonY);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.lineWidth = 2;
+
+    const sep0Bottom = (laneX(0) + laneX(1)) / 2;
+    const sep1Bottom = (laneX(1) + laneX(2)) / 2;
+    const sep0Top = (laneXAtY(0, horizonY) + laneXAtY(1, horizonY)) / 2;
+    const sep1Top = (laneXAtY(1, horizonY) + laneXAtY(2, horizonY)) / 2;
+
+    function dashedPerspectiveLine(xBottom, xTop) {
+      ctx.beginPath();
+      const dash = 34;
+      const gap = 26;
+      let y = H - (roadOffset % (dash + gap));
+      while (y > horizonY) {
+        const t0 = clamp((H - y) / (H - horizonY), 0, 1);
+        const t1 = clamp((H - (y - dash)) / (H - horizonY), 0, 1);
+        const x0 = xBottom + (xTop - xBottom) * t0;
+        const x1 = xBottom + (xTop - xBottom) * t1;
+        ctx.moveTo(x0, y);
+        ctx.lineTo(x1, y - dash);
+        y -= dash + gap;
+      }
+      ctx.stroke();
+    }
+
+    dashedPerspectiveLine(sep0Bottom, sep0Top);
+    dashedPerspectiveLine(sep1Bottom, sep1Top);
+
+    ctx.fillStyle = "rgba(255,255,255,0.06)";
+    ctx.fillRect(roadTopLeft, horizonY - 32, roadTopRight - roadTopLeft, 32);
+  }
+
+  function drawHUD() {
+    const pad = 12;
+    const barW = W * 0.42;
+    const barH = 10;
+
+    ctx.font = "14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.textBaseline = "top";
+
+    ctx.fillStyle = "rgba(255,255,255,0.18)";
+    ctx.fillRect(pad, pad, barW, barH);
+    ctx.fillStyle = "rgba(255,70,70,0.85)";
+    ctx.fillRect(pad, pad, barW * (player.hp / player.hpMax), barH);
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.fillText(`PS ${Math.ceil(player.hp)}/${player.hpMax}`, pad, pad + 14);
+
+    const troopY = pad + 38;
+    ctx.fillStyle = "rgba(255,255,255,0.18)";
+    ctx.fillRect(pad, troopY, barW, barH);
+    const troopMax = Math.max(1, player.troops * player.troopHPPerUnit);
+    const troopFrac = troopMax ? (player.troopPool / troopMax) : 0;
+    ctx.fillStyle = "rgba(80,200,255,0.85)";
+    ctx.fillRect(pad, troopY, barW * troopFrac, barH);
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.fillText(`Truppe N=${player.troops}`, pad, troopY + 14);
+
+    const xpY = pad + 64;
+    ctx.fillStyle = "rgba(255,255,255,0.18)";
+    ctx.fillRect(pad, xpY, barW, barH);
+    ctx.fillStyle = "rgba(140,255,120,0.85)";
+    ctx.fillRect(pad, xpY, barW * (player.xp / player.xpToNext), barH);
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.fillText(`LV ${player.level}  XP ${Math.floor(player.xp)}/${player.xpToNext}`, pad, xpY + 14);
+
+    const rightX = W - pad;
+    ctx.textAlign = "right";
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.fillText(`Arma Tier ${player.weaponTier}`, rightX, pad);
+    ctx.fillText(`DMG ${player.dmg} | ROF ${player.fireRate.toFixed(1)}/s`, rightX, pad + 18);
+    ctx.fillText(`Metri ${Math.floor(meters)}`, rightX, pad + 36);
+    ctx.textAlign = "left";
+  }
+
+  function drawPlayer() {
+    ctx.save();
+    const scale = clamp(0.7 + (player.y / H) * 0.5, 0.7, 1.1);
+    const drawX = drawLaneX(player.lane, player.y, player.x);
+    ctx.translate(drawX, player.y);
+    ctx.scale(scale, scale);
+
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.beginPath();
+    ctx.ellipse(0, 26, 18, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(40,50,70,0.85)";
+    ctx.beginPath();
+    ctx.arc(0, -6, player.r * 0.75, Math.PI, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = player.moving ? "rgba(200,220,255,0.7)" : "rgba(220,235,255,0.9)";
+    ctx.beginPath();
+    ctx.arc(0, 4, player.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(30,40,60,0.9)";
+    ctx.beginPath();
+    ctx.arc(0, -8, player.r * 0.55, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(255,220,140,0.9)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(6, -8);
+    ctx.lineTo(18, -18);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function drawBullets() {
+    ctx.fillStyle = "rgba(255,220,140,0.95)";
+    for (const b of bullets) {
+      const drawX = drawLaneX(b.lane, b.y, b.x);
+      ctx.beginPath();
+      ctx.arc(drawX, b.y, b.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawEnemies() {
+    for (const e of enemies) {
+      const drawX = drawLaneX(e.lane, e.y, e.x);
+      let col = "rgba(255,90,120,0.95)";
+      if (e.type === "miniboss") col = "rgba(255,160,80,0.95)";
+      if (e.type === "boss") col = "rgba(210,120,255,0.95)";
+      if (e.type === "final") col = "rgba(255,220,80,0.95)";
+
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.arc(drawX, e.y, e.r, 0, Math.PI * 2);
+      ctx.fill();
+
+      const w = 64;
+      const h = 6;
+      const x = drawX - w / 2;
+      const y = e.y - (e.r + 18);
+      ctx.fillStyle = "rgba(255,255,255,0.14)";
+      ctx.fillRect(x, y, w, h);
+      ctx.fillStyle = "rgba(255,255,255,0.78)";
+      ctx.fillRect(x, y, w * (e.hp / e.hpMax), h);
+    }
+  }
+
+  function drawPickups() {
+    for (const p of pickups) {
+      const drawX = drawLaneX(p.lane, p.y, p.x);
+      ctx.fillStyle = "rgba(120,255,160,0.95)";
+      ctx.beginPath();
+      ctx.arc(drawX, p.y, p.r, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`+${p.amount}`, drawX, p.y);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+    }
+  }
+
+  function drawStatues() {
+    for (const s of statues) {
+      const drawX = drawLaneX(s.lane, s.y, s.x);
+      ctx.fillStyle = "rgba(180,200,255,0.20)";
+      ctx.fillRect(drawX - s.w / 2, s.y - s.h / 2, s.w, s.h);
+
+      ctx.strokeStyle = "rgba(180,200,255,0.55)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(drawX - s.w / 2, s.y - s.h / 2, s.w, s.h);
+
+      const w = 70;
+      const h = 6;
+      const x = drawX - w / 2;
+      const y = s.y - s.h / 2 - 16;
+      ctx.fillStyle = "rgba(255,255,255,0.14)";
+      ctx.fillRect(x, y, w, h);
+      ctx.fillStyle = "rgba(120,180,255,0.85)";
+      ctx.fillRect(x, y, w * (s.hp / s.hpMax), h);
+
+      ctx.fillStyle = "rgba(255,255,255,0.75)";
+      ctx.font = "11px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("STATUA", drawX, s.y - 6);
+      ctx.fillText(`Tier → ${clamp(player.weaponTier + 1, 1, 20)}`, drawX, s.y + 10);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+    }
+  }
+
+  function render() {
+    drawRoad();
+    drawPickups();
+    drawStatues();
+    drawEnemies();
+    drawBullets();
+    drawPlayer();
+    drawHUD();
+  }
+
+  function loop(now) {
+    const dt = clamp((now - tPrev) / 1000, 0, 0.033);
+    tPrev = now;
+
+    if (running) update(dt, now);
+    render();
+
+    requestAnimationFrame(loop);
+  }
+
+  resetGame();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
