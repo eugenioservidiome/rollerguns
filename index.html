@@ -156,24 +156,7 @@
   const rand = (a, b) => a + Math.random() * (b - a);
   const TILE = 32;
 
-  const SPRITES = {
-    player_idle: { x: 0, y: 0, w: 32, h: 32 },
-    player_walk1: { x: 32, y: 0, w: 32, h: 32 },
-    player_walk2: { x: 64, y: 0, w: 32, h: 32 },
-    player_walk3: { x: 96, y: 0, w: 32, h: 32 },
-    player_shoot1: { x: 128, y: 0, w: 32, h: 32 },
-    player_shoot2: { x: 160, y: 0, w: 32, h: 32 }
-  };
-
-  const WEAPON_FRAMES = [
-    { x: 0, y: 0, w: 32, h: 32 },
-    { x: 32, y: 0, w: 32, h: 32 },
-    { x: 64, y: 0, w: 32, h: 32 }
-  ];
-
   const assets = {
-    soldier: new Image(),
-    weapons: new Image(),
     jeep: new Image(),
     barrel: new Image(),
     tower: new Image(),
@@ -191,8 +174,6 @@
   }
 
   Promise.all([
-    loadImage(assets.soldier, "assets/characters/soldier_spritesheet.png"),
-    loadImage(assets.weapons, "assets/weapons/weapons.png"),
     loadImage(assets.jeep, "assets/props/jeep.png"),
     loadImage(assets.barrel, "assets/props/barrel.png"),
     loadImage(assets.tower, "assets/props/lookout_tower.png"),
@@ -216,10 +197,41 @@
   window.addEventListener("resize", resize, { passive:true });
   resize();
 
-  function laneX(i) {
-    const margin = W * 0.14;
-    const usable = W - margin * 2;
-    return margin + usable * (i / 2);
+  function roadGeom() {
+    const bottomW = W * 0.88;
+    const topW = W * 0.42;
+    const bottomY = H * 0.92;
+    const topY = H * 0.10;
+    const cx = W * 0.52;
+    return { bottomW, topW, bottomY, topY, cx };
+  }
+
+  function depthT(yWorld) {
+    const D = 1200;
+    return clamp(yWorld / D, 0, 1);
+  }
+
+  function scaleAt(yWorld) {
+    const t = depthT(yWorld);
+    return lerp(0.35, 1.25, Math.pow(t, 1.35));
+  }
+
+  function laneCenterX(lane, yWorld) {
+    const g = roadGeom();
+    const t = depthT(yWorld);
+    const w = lerp(g.topW, g.bottomW, t);
+    const left = g.cx - w / 2;
+    const laneW = w / 3;
+    return left + laneW * (lane + 0.5);
+  }
+
+  function worldToScreen(lane, yWorld) {
+    const g = roadGeom();
+    const t = depthT(yWorld);
+    const y = lerp(g.topY, g.bottomY, t);
+    const x = laneCenterX(lane, yWorld);
+    const s = scaleAt(yWorld);
+    return { x, y, s, t };
   }
 
   let tPrev = performance.now();
@@ -273,6 +285,13 @@
   const pickups = [];
   const statues = [];
   const propSprites = ["jeep", "barrel", "tower"];
+  const fx = { particles: [], floaters: [], shakes: [], banners: [] };
+  let camShake = { t: 0, mag: 0 };
+  let visualTroops = 5;
+  let gate = { active: false, yWorld: -400, mult: 99, passed: false, nextIn: 6 };
+  let nextCapsuleIn = 10;
+  let lastTroopCount = 5;
+  const playerDepth = 1050;
 
   let meters = 0;
   let difficulty = 1;
@@ -369,8 +388,7 @@
 
     enemies.push({
       lane: 1,
-      x: laneX(1),
-      y: -80,
+      yWorld: 0,
       r: radius,
       type,
       hpMax: hp,
@@ -384,8 +402,7 @@
     const amount = Math.random() < 0.65 ? 1 : 2;
     pickups.push({
       lane: 0,
-      x: laneX(0),
-      y: -60,
+      yWorld: 0,
       r: 14,
       amount,
       speed: 170 + difficulty * 8
@@ -402,14 +419,28 @@
     const spriteName = propSprites[Math.floor(Math.random() * propSprites.length)];
     statues.push({
       lane: 2,
-      x: laneX(2),
-      y: -90,
+      yWorld: 0,
       w: 46,
       h: 70,
       speed: 120 + difficulty * 6,
       hpMax: hp,
       hp,
-      spriteName
+      spriteName,
+      kind: "prop"
+    });
+  }
+
+  function spawnCapsule() {
+    const hp = Math.round(420 + difficulty * 35);
+    statues.push({
+      lane: 0,
+      yWorld: 0,
+      w: 70,
+      h: 120,
+      speed: 110 + difficulty * 5,
+      hpMax: hp,
+      hp,
+      kind: "capsule"
     });
   }
 
@@ -437,6 +468,72 @@
     }
   }
 
+  function popShake(mag) {
+    camShake.t = 1;
+    camShake.mag = mag;
+  }
+
+  function spawnFloater(text, x, y, color) {
+    fx.floaters.push({ text, x, y, vy: -60, t: 0, dur: 0.8, color });
+  }
+
+  function spawnBanner(text) {
+    fx.banners.push({ text, t: 0, dur: 1.2 });
+  }
+
+  function spawnParticles(x, y, count, color) {
+    for (let i = 0; i < count; i++) {
+      fx.particles.push({
+        x,
+        y,
+        vx: rand(-60, 60),
+        vy: rand(-120, -20),
+        life: 0,
+        ttl: rand(0.4, 0.9),
+        color,
+        size: rand(2, 5),
+        grav: rand(120, 220)
+      });
+    }
+  }
+
+  function updateFX(dt) {
+    camShake.t = Math.max(0, camShake.t - dt * 6);
+
+    for (let i = fx.particles.length - 1; i >= 0; i--) {
+      const p = fx.particles[i];
+      p.life += dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vy += p.grav * dt;
+      if (p.life >= p.ttl) fx.particles.splice(i, 1);
+    }
+
+    for (let i = fx.floaters.length - 1; i >= 0; i--) {
+      const f = fx.floaters[i];
+      f.t += dt;
+      f.y += f.vy * dt;
+      if (f.t >= f.dur) fx.floaters.splice(i, 1);
+    }
+
+    for (let i = fx.banners.length - 1; i >= 0; i--) {
+      const b = fx.banners[i];
+      b.t += dt;
+      if (b.t >= b.dur) fx.banners.splice(i, 1);
+    }
+  }
+
+  function roundedRectPath(x, y, w, h, r) {
+    const rr = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+  }
+
   function shoot(now) {
     if (player.moving) return;
     const cooldown = 1 / player.fireRate;
@@ -451,6 +548,7 @@
       vy: -player.bulletSpeed,
       dmg: player.dmg
     });
+    spawnParticles(player.x, player.y - player.r - 10, 6, "rgba(200,120,255,0.8)");
   }
 
   function endGame() {
@@ -467,6 +565,9 @@
     enemies.length = 0;
     pickups.length = 0;
     statues.length = 0;
+    fx.particles.length = 0;
+    fx.floaters.length = 0;
+    fx.banners.length = 0;
 
     meters = 0;
     difficulty = 1;
@@ -474,7 +575,12 @@
     nextEnemyIn = 0.6;
     nextPickupIn = 2.0;
     nextStatueIn = 4.0;
+    nextCapsuleIn = 10;
     roadOffset = 0;
+    gate.active = false;
+    gate.yWorld = -400;
+    gate.passed = false;
+    gate.nextIn = 6;
 
     player.lane = 1;
     player.laneFrom = 1;
@@ -496,6 +602,8 @@
     player.weaponTier = 1;
     recalcWeapon();
     player.lastShot = 0;
+    visualTroops = player.troops;
+    lastTroopCount = player.troops;
 
     overlay.style.display = "none";
     running = true;
@@ -510,8 +618,8 @@
     meters += speedMeters * dt;
     difficulty = 1 + meters / 220;
 
-    const targetX = laneX(player.laneTo);
-    const curX = laneX(player.laneFrom);
+    const targetX = laneCenterX(player.laneTo, playerDepth);
+    const curX = laneCenterX(player.laneFrom, playerDepth);
 
     if (player.moving) {
       player.laneT = Math.min(1, player.laneT + dt / player.laneMoveDur);
@@ -524,10 +632,10 @@
         player.laneT = 1;
       }
     } else {
-      player.x = laneX(player.lane);
+      player.x = laneCenterX(player.lane, playerDepth);
     }
 
-    player.y = H * 0.82;
+    player.y = worldToScreen(1, playerDepth).y;
 
     shoot(now / 1000);
 
@@ -551,44 +659,85 @@
       nextStatueIn = rand(5.0, 8.0);
     }
 
-    roadOffset = (roadOffset + (240 + difficulty * 12) * dt) % 60;
+    nextCapsuleIn -= dt;
+    if (nextCapsuleIn <= 0) {
+      spawnCapsule();
+      nextCapsuleIn = rand(10, 16);
+    }
+
+    gate.nextIn -= dt;
+    if (!gate.active && gate.nextIn <= 0) {
+      gate.active = true;
+      gate.passed = false;
+      gate.yWorld = 0;
+    }
+
+    if (gate.active) {
+      gate.yWorld += (220 + difficulty * 10) * dt;
+      if (!gate.passed && gate.yWorld > playerDepth) {
+        gate.passed = true;
+        gate.active = false;
+        gate.nextIn = rand(10, 16);
+        spawnParticles(W * 0.52, H * 0.3, 40, "rgba(120,200,255,0.85)");
+        spawnBanner("x99");
+        popShake(7);
+      }
+    }
+
+    roadOffset = (roadOffset + (260 + difficulty * 14) * dt) % 60;
 
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i];
       b.y += b.vy * dt;
-      if (b.y < -40) bullets.splice(i, 1);
+      if (b.y < -60) bullets.splice(i, 1);
     }
 
     for (let i = pickups.length - 1; i >= 0; i--) {
       const p = pickups[i];
-      p.y += p.speed * dt;
+      p.yWorld += p.speed * dt;
 
-      if (p.lane === player.lane && Math.abs(p.y - player.y) < 36 && !player.moving) {
+      if (p.lane === player.lane && Math.abs(p.yWorld - playerDepth) < 60 && !player.moving) {
         player.troops += p.amount;
         recalcTroopPool();
         addXP(6 * p.amount);
+        const s = worldToScreen(p.lane, p.yWorld);
+        spawnFloater(`+${p.amount}`, s.x, s.y, "#ffd34f");
+        spawnParticles(s.x, s.y, 16, "rgba(255,220,120,0.9)");
+        popShake(3);
         pickups.splice(i, 1);
         continue;
       }
-      if (p.y > H + 80) pickups.splice(i, 1);
+      if (p.yWorld > 1400) pickups.splice(i, 1);
     }
 
     for (let i = statues.length - 1; i >= 0; i--) {
       const s = statues[i];
-      s.y += s.speed * dt;
+      s.yWorld += s.speed * dt;
 
       for (let j = bullets.length - 1; j >= 0; j--) {
         const b = bullets[j];
-        if (b.lane !== 2) continue;
-        const left = s.x - s.w / 2;
-        const right = s.x + s.w / 2;
-        const top = s.y - s.h / 2;
-        const bot = s.y + s.h / 2;
+        if (b.lane !== s.lane) continue;
+        const st = worldToScreen(s.lane, s.yWorld);
+        const w = s.w * st.s;
+        const h = s.h * st.s;
+        const left = st.x - w / 2;
+        const right = st.x + w / 2;
+        const top = st.y - h / 2;
+        const bot = st.y + h / 2;
         if (b.x > left - b.r && b.x < right + b.r && b.y > top - b.r && b.y < bot + b.r) {
           s.hp -= b.dmg;
           bullets.splice(j, 1);
           if (s.hp <= 0) {
-            player.weaponTier = clamp(player.weaponTier + 1, 1, 20);
+            if (s.kind === "capsule") {
+              player.weaponTier = clamp(player.weaponTier + 2, 1, 20);
+              spawnBanner("SUPER ARMA!");
+              spawnParticles(st.x, st.y, 42, "rgba(255,200,140,0.9)");
+              popShake(10);
+            } else {
+              player.weaponTier = clamp(player.weaponTier + 1, 1, 20);
+              spawnParticles(st.x, st.y, 24, "rgba(140,200,255,0.8)");
+              popShake(5);
+            }
             recalcWeapon();
             addXP(20 + player.weaponTier * 2);
             statues.splice(i, 1);
@@ -597,20 +746,20 @@
         }
       }
 
-      if (i < statues.length && s.y > H + 120) statues.splice(i, 1);
+      if (i < statues.length && s.yWorld > 1400) statues.splice(i, 1);
     }
 
     for (let i = enemies.length - 1; i >= 0; i--) {
       const e = enemies[i];
-      e.y += e.speed * dt;
-      e.x = laneX(1);
+      e.yWorld += e.speed * dt;
 
       for (let j = bullets.length - 1; j >= 0; j--) {
         const b = bullets[j];
         if (b.lane !== 1) continue;
-        const dx = b.x - e.x;
-        const dy = b.y - e.y;
-        const rr = b.r + e.r;
+        const s = worldToScreen(e.lane, e.yWorld);
+        const rr = b.r + e.r * s.s;
+        const dx = b.x - s.x;
+        const dy = b.y - s.y;
         if (dx * dx + dy * dy <= rr * rr) {
           e.hp -= b.dmg;
           bullets.splice(j, 1);
@@ -619,66 +768,98 @@
               e.type === "miniboss" ? 45 :
                 e.type === "boss" ? 110 : 180;
             addXP(Math.round(base + difficulty * 2));
+            spawnParticles(s.x, s.y, 22, "rgba(255,120,120,0.85)");
+            popShake(e.type === "grunt" ? 3 : 6);
             enemies.splice(i, 1);
           }
           break;
         }
       }
 
-      const contactY = player.y - 70;
-      if (i < enemies.length && e.y >= contactY) {
+      const contactY = playerDepth - 120;
+      if (i < enemies.length && e.yWorld >= contactY) {
         damageTroops(e.dmgPerSec * dt);
-        e.y = contactY;
+        e.yWorld = contactY;
       }
 
-      if (i < enemies.length && e.y > H + 140) enemies.splice(i, 1);
+      if (i < enemies.length && e.yWorld > 1400) enemies.splice(i, 1);
     }
+
+    visualTroops = lerp(visualTroops, player.troops, 0.08);
+    if (player.troops > lastTroopCount) {
+      spawnParticles(player.x + rand(-40, 40), player.y + rand(10, 50), 14, "rgba(120,200,255,0.9)");
+      popShake(4);
+      lastTroopCount = player.troops;
+    } else if (player.troops < lastTroopCount) {
+      lastTroopCount = player.troops;
+    }
+
+    updateFX(dt);
 
     if (player.hp <= 0) endGame();
   }
 
-  function drawRoad() {
+  function drawRoadPerspective() {
+    ctx.save();
+    if (camShake.t > 0) {
+      const k = camShake.t;
+      ctx.translate((Math.random() - 0.5) * camShake.mag * k, (Math.random() - 0.5) * camShake.mag * k);
+    }
+    ctx.fillStyle = "#071018";
+    ctx.fillRect(0, 0, W, H);
+
+    const g = roadGeom();
+    ctx.beginPath();
+    ctx.moveTo(g.cx - g.topW / 2, g.topY);
+    ctx.lineTo(g.cx + g.topW / 2, g.topY);
+    ctx.lineTo(g.cx + g.bottomW / 2, g.bottomY);
+    ctx.lineTo(g.cx - g.bottomW / 2, g.bottomY);
+    ctx.closePath();
+
     if (assets.ready && assets.pattern) {
+      ctx.save();
+      ctx.clip();
+      ctx.translate(0, roadOffset * 0.6);
       ctx.fillStyle = assets.pattern;
-      ctx.fillRect(0, 0, W, H);
+      ctx.fillRect(g.cx - g.bottomW / 2, g.topY - 2000, g.bottomW, (g.bottomY - g.topY) + 4000);
+      ctx.restore();
     } else {
-      ctx.fillStyle = "#0b0f17";
-      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = "#1a2638";
+      ctx.fill();
     }
 
-    const roadLeft = W * 0.10;
-    const roadRight = W * 0.90;
+    ctx.fillStyle = "rgba(0,0,0,0.22)";
+    ctx.fill();
 
-    ctx.fillStyle = "rgba(16,24,42,0.75)";
-    ctx.fillRect(roadLeft, 0, roadRight - roadLeft, H);
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(g.cx - g.topW / 2, g.topY);
+    ctx.lineTo(g.cx - g.bottomW / 2, g.bottomY);
+    ctx.moveTo(g.cx + g.topW / 2, g.topY);
+    ctx.lineTo(g.cx + g.bottomW / 2, g.bottomY);
+    ctx.stroke();
 
-    ctx.strokeStyle = "rgba(255,255,255,0.12)";
-    ctx.lineWidth = 2;
-
-    const x0 = laneX(0);
-    const x1 = laneX(1);
-    const x2 = laneX(2);
-    const sep1 = (x0 + x1) / 2;
-    const sep2 = (x1 + x2) / 2;
-
-    function dashedLine(x) {
+    function laneLine(frac) {
+      ctx.strokeStyle = "rgba(255,255,255,0.16)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([14, 18]);
       ctx.beginPath();
-      const dash = 34;
-      const gap = 26;
-      let y = -roadOffset;
-      while (y < H + dash) {
-        ctx.moveTo(x, y);
-        ctx.lineTo(x, y + dash);
-        y += dash + gap;
+      for (let i = 0; i <= 10; i++) {
+        const t = i / 10;
+        const w = lerp(g.topW, g.bottomW, t);
+        const x = g.cx - w / 2 + w * frac;
+        const y = lerp(g.topY, g.bottomY, t);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
       }
       ctx.stroke();
+      ctx.setLineDash([]);
     }
+    laneLine(1 / 3);
+    laneLine(2 / 3);
 
-    dashedLine(sep1);
-    dashedLine(sep2);
-
-    ctx.fillStyle = "rgba(255,255,255,0.07)";
-    ctx.fillRect(roadLeft, 0, roadRight - roadLeft, 44);
+    ctx.restore();
   }
 
   function drawHUD() {
@@ -723,163 +904,261 @@
     ctx.textAlign = "left";
   }
 
-  function drawPlayer() {
+  function drawGate() {
+    if (!gate.active) return;
+    const s = worldToScreen(1, gate.yWorld);
+    const g = roadGeom();
+    const w = lerp(g.topW, g.bottomW, depthT(gate.yWorld)) * 0.92;
+    const h = 38 * s.s;
+    const x = g.cx - w / 2;
+    const y = s.y - h / 2;
     ctx.save();
-    ctx.translate(player.x, player.y);
-
-    ctx.fillStyle = "rgba(0,0,0,0.35)";
-    ctx.beginPath();
-    ctx.ellipse(0, 26, 18, 8, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    if (assets.ready) {
-      let frame = SPRITES.player_idle;
-      const shootActive = nowSec - player.lastShot < 0.15;
-      if (shootActive) {
-        frame = (Math.floor((nowSec * 10) % 2) === 0) ? SPRITES.player_shoot1 : SPRITES.player_shoot2;
-      } else if (player.moving) {
-        const step = Math.floor((nowSec * 5) % 3);
-        frame = step === 0 ? SPRITES.player_walk1 : step === 1 ? SPRITES.player_walk2 : SPRITES.player_walk3;
-      }
-      ctx.drawImage(
-        assets.soldier,
-        frame.x,
-        frame.y,
-        frame.w,
-        frame.h,
-        -TILE / 2,
-        -TILE / 2,
-        TILE,
-        TILE
-      );
-    } else {
-      ctx.fillStyle = "rgba(255,255,255,0.92)";
-      ctx.beginPath();
-      ctx.arc(0, 0, player.r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    ctx.strokeStyle = "rgba(255,220,140,0.9)";
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(10, -4);
-    ctx.lineTo(22, -10);
-    ctx.stroke();
-
-    if (assets.ready) {
-      const weaponIndex = (player.weaponTier - 1) % WEAPON_FRAMES.length;
-      const weapon = WEAPON_FRAMES[weaponIndex];
-      ctx.drawImage(
-        assets.weapons,
-        weapon.x,
-        weapon.y,
-        weapon.w,
-        weapon.h,
-        TILE * 0.25,
-        TILE * 0.2,
-        TILE * 0.6,
-        TILE * 0.6
-      );
-    }
-
+    ctx.fillStyle = "rgba(40,80,120,0.85)";
+    ctx.strokeStyle = "rgba(180,220,255,0.9)";
+    ctx.lineWidth = 2;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeRect(x, y, w, h);
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.font = `${Math.max(18, 28 * s.s)}px system-ui`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`x${gate.mult}`, g.cx, s.y);
     ctx.restore();
   }
 
-  function drawBullets() {
-    ctx.fillStyle = "rgba(255,220,140,0.95)";
-    for (const b of bullets) {
-      ctx.beginPath();
-      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  function drawEnemies() {
-    for (const e of enemies) {
-      let col = "rgba(255,90,120,0.95)";
-      if (e.type === "miniboss") col = "rgba(255,160,80,0.95)";
-      if (e.type === "boss") col = "rgba(210,120,255,0.95)";
-      if (e.type === "final") col = "rgba(255,220,80,0.95)";
-
-      ctx.fillStyle = col;
-      ctx.beginPath();
-      ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2);
-      ctx.fill();
-
-      const w = 64;
-      const h = 6;
-      const x = e.x - w / 2;
-      const y = e.y - (e.r + 18);
-      ctx.fillStyle = "rgba(255,255,255,0.14)";
-      ctx.fillRect(x, y, w, h);
-      ctx.fillStyle = "rgba(255,255,255,0.78)";
-      ctx.fillRect(x, y, w * (e.hp / e.hpMax), h);
-    }
-  }
-
-  function drawPickups() {
+  function drawPickupsPerspective() {
     for (const p of pickups) {
-      const w = 30;
-      const h = 18;
-      const x = p.x - w / 2;
-      const y = p.y - h / 2;
-      ctx.fillStyle = p.amount === 2 ? "rgba(80,160,255,0.75)" : "rgba(120,220,140,0.75)";
-      ctx.strokeStyle = "rgba(255,255,255,0.65)";
+      const s = worldToScreen(p.lane, p.yWorld);
+      const bounce = Math.sin((nowSec + p.yWorld * 0.01) * 6) * 4;
+      ctx.save();
+      ctx.translate(s.x, s.y + bounce);
+      const w = 56 * s.s;
+      const h = 28 * s.s;
+      ctx.fillStyle = "rgba(255,210,80,0.85)";
+      ctx.strokeStyle = "rgba(255,255,255,0.9)";
       ctx.lineWidth = 2;
-      ctx.fillRect(x, y, w, h);
-      ctx.strokeRect(x, y, w, h);
-      ctx.fillStyle = "rgba(255,255,255,0.95)";
-      ctx.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.shadowColor = "rgba(255,200,80,0.8)";
+      ctx.shadowBlur = 12;
+      ctx.fillRect(-w / 2, -h / 2, w, h);
+      ctx.strokeRect(-w / 2, -h / 2, w, h);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "rgba(40,30,10,0.95)";
+      ctx.font = `${Math.max(16, 22 * s.s)}px system-ui`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(`+${p.amount}`, p.x, p.y + 1);
-      ctx.textAlign = "left";
-      ctx.textBaseline = "top";
+      ctx.fillText(`+${p.amount}`, 0, 1);
+      ctx.restore();
     }
   }
 
-  function drawStatues() {
+  function drawStatuesPerspective() {
     for (const s of statues) {
-      if (assets.ready) {
-        const sprite = assets[s.spriteName];
-        const size = TILE * 2;
-        ctx.drawImage(sprite, s.x - size / 2, s.y - size / 2, size, size);
+      const st = worldToScreen(s.lane, s.yWorld);
+      const w = s.w * st.s;
+      const h = s.h * st.s;
+      if (s.kind === "prop") {
+        if (assets.ready) {
+          const sprite = assets[s.spriteName];
+          const size = TILE * 2 * st.s;
+          ctx.drawImage(sprite, st.x - size / 2, st.y - size / 2, size, size);
+        } else {
+          ctx.fillStyle = "rgba(180,200,255,0.20)";
+          ctx.fillRect(st.x - w / 2, st.y - h / 2, w, h);
+        }
       } else {
-        ctx.fillStyle = "rgba(180,200,255,0.20)";
-        ctx.fillRect(s.x - s.w / 2, s.y - s.h / 2, s.w, s.h);
-
-        ctx.strokeStyle = "rgba(180,200,255,0.55)";
+        ctx.save();
+        ctx.translate(st.x, st.y);
+        const bob = Math.sin(nowSec * 3 + s.yWorld * 0.01) * 3;
+        ctx.translate(0, bob);
+        const bodyW = w * 0.8;
+        const bodyH = h;
+        const grad = ctx.createLinearGradient(-bodyW / 2, -bodyH / 2, bodyW / 2, bodyH / 2);
+        grad.addColorStop(0, "rgba(180,220,255,0.95)");
+        grad.addColorStop(1, "rgba(80,120,180,0.95)");
+        ctx.fillStyle = grad;
+        roundedRectPath(-bodyW / 2, -bodyH / 2, bodyW, bodyH, 12 * st.s);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,0.6)";
         ctx.lineWidth = 2;
-        ctx.strokeRect(s.x - s.w / 2, s.y - s.h / 2, s.w, s.h);
+        ctx.stroke();
+        ctx.fillStyle = "rgba(20,30,40,0.7)";
+        ctx.fillRect(-bodyW * 0.35, -bodyH * 0.1, bodyW * 0.7, bodyH * 0.22);
+        ctx.fillStyle = "rgba(255,255,255,0.9)";
+        ctx.font = `${Math.max(10, 12 * st.s)}px system-ui`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("AIUTO!", 0, -bodyH * 0.02);
+        ctx.restore();
       }
 
-      const w = 70;
-      const h = 6;
-      const x = s.x - w / 2;
-      const y = s.y - s.h / 2 - 16;
-      ctx.fillStyle = "rgba(255,255,255,0.14)";
-      ctx.fillRect(x, y, w, h);
-      ctx.fillStyle = "rgba(120,180,255,0.85)";
-      ctx.fillRect(x, y, w * (s.hp / s.hpMax), h);
+      const barW = 90 * st.s;
+      const barH = 8 * st.s;
+      ctx.fillStyle = "rgba(0,0,0,0.5)";
+      ctx.fillRect(st.x - barW / 2, st.y - h / 2 - 16 * st.s, barW, barH);
+      ctx.fillStyle = "rgba(255,120,120,0.9)";
+      ctx.fillRect(st.x - barW / 2, st.y - h / 2 - 16 * st.s, barW * (s.hp / s.hpMax), barH);
+    }
+  }
 
-      ctx.fillStyle = "rgba(255,255,255,0.75)";
-      ctx.font = "11px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+  function drawEnemiesPerspective() {
+    for (const e of enemies) {
+      const s = worldToScreen(e.lane, e.yWorld);
+      if (e.type === "grunt") {
+        const count = Math.max(6, Math.floor(14 * s.s));
+        ctx.fillStyle = "rgba(255,90,120,0.9)";
+        for (let i = 0; i < count; i++) {
+          const ox = rand(-18, 18) * s.s;
+          const oy = rand(-10, 10) * s.s;
+          ctx.beginPath();
+          ctx.ellipse(s.x + ox, s.y + oy, 6 * s.s, 4 * s.s, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else {
+        const bodyW = 46 * s.s;
+        const bodyH = 62 * s.s;
+        ctx.save();
+        ctx.translate(s.x, s.y);
+        ctx.fillStyle = e.type === "final" ? "rgba(255,220,80,0.95)" :
+          e.type === "boss" ? "rgba(210,120,255,0.95)" : "rgba(255,160,80,0.95)";
+        ctx.strokeStyle = "rgba(0,0,0,0.35)";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.roundRect(-bodyW / 2, -bodyH / 2, bodyW, bodyH, 10 * s.s);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "rgba(0,0,0,0.25)";
+        ctx.beginPath();
+        ctx.arc(0, -bodyH * 0.2, 12 * s.s, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        const barW = 140 * s.s;
+        const barH = 10 * s.s;
+        const x = s.x - barW / 2;
+        const y = s.y - bodyH / 2 - 18 * s.s;
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.fillRect(x, y, barW, barH);
+        ctx.fillStyle = "rgba(255,90,90,0.9)";
+        ctx.fillRect(x, y, barW * (e.hp / e.hpMax), barH);
+        ctx.fillStyle = "rgba(255,255,255,0.92)";
+        ctx.font = `${Math.max(10, 12 * s.s)}px system-ui`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "bottom";
+        ctx.fillText(Math.ceil(e.hp), s.x, y - 2);
+      }
+    }
+  }
+
+  function drawBulletsStream() {
+    for (const b of bullets) {
+      const glow = ctx.createRadialGradient(b.x, b.y, 2, b.x, b.y, 10);
+      glow.addColorStop(0, "rgba(220,140,255,0.9)");
+      glow.addColorStop(1, "rgba(80,40,120,0)");
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(200,120,255,0.95)";
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawTroopCrowd() {
+    const count = Math.min(160, Math.max(0, Math.floor(visualTroops)));
+    const cols = 10;
+    const spacingX = 16;
+    const spacingY = 14;
+    for (let i = 0; i < count; i++) {
+      const row = Math.floor(i / cols);
+      const col = i % cols;
+      const ox = (col - (cols - 1) / 2) * spacingX + (row % 2) * 6;
+      const oy = row * spacingY + 24;
+      const bob = Math.sin(nowSec * 3 + i * 0.2) * 2;
+      const x = player.x + ox;
+      const y = player.y + oy + bob;
+      ctx.fillStyle = "rgba(120,170,255,0.9)";
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(240,240,255,0.9)";
+      ctx.beginPath();
+      ctx.arc(x, y - 3, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawPlayerProcedural() {
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.beginPath();
+    ctx.ellipse(0, 32, 26, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(150,200,255,0.95)";
+    ctx.beginPath();
+    ctx.arc(0, 0, 18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.beginPath();
+    ctx.arc(0, -6, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,200,120,0.9)";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(14, -2);
+    ctx.lineTo(28, -12);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawFX() {
+    for (const p of fx.particles) {
+      const lifeT = 1 - p.life / p.ttl;
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = Math.max(0, lifeT);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    for (const f of fx.floaters) {
+      const t = f.t / f.dur;
+      ctx.fillStyle = f.color;
+      ctx.globalAlpha = Math.max(0, 1 - t);
+      ctx.font = "bold 28px system-ui";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("STATUA", s.x, s.y - 6);
-      ctx.fillText(`Tier → ${clamp(player.weaponTier + 1, 1, 20)}`, s.x, s.y + 10);
-      ctx.textAlign = "left";
-      ctx.textBaseline = "top";
+      ctx.fillText(f.text, f.x, f.y);
+      ctx.globalAlpha = 1;
+    }
+
+    for (const b of fx.banners) {
+      const t = Math.min(1, b.t / 0.2);
+      ctx.save();
+      ctx.translate(W * 0.5, H * 0.16);
+      ctx.scale(0.6 + t * 0.4, 0.6 + t * 0.4);
+      ctx.fillStyle = "rgba(255,220,120,0.95)";
+      ctx.font = "bold 32px system-ui";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(b.text, 0, 0);
+      ctx.restore();
     }
   }
 
   function render() {
-    drawRoad();
-    drawPickups();
-    drawStatues();
-    drawEnemies();
-    drawBullets();
-    drawPlayer();
+    drawRoadPerspective();
+    drawGate();
+    drawPickupsPerspective();
+    drawStatuesPerspective();
+    drawEnemiesPerspective();
+    drawBulletsStream();
+    drawTroopCrowd();
+    drawPlayerProcedural();
+    drawFX();
     drawHUD();
   }
 
