@@ -1,0 +1,11 @@
+import test from'node:test';import assert from'node:assert/strict';
+import{validUsername,normalizeUsername,calculateScore}from'../src/game/utils.js';
+import{DifficultyDirector}from'../src/game/DifficultyDirector.js';
+import{ObstacleManager}from'../src/game/ObstacleManager.js';
+import{dedupeTop,validSubmission}from'../src/services/LeaderboardService.js';
+test('username validation',()=>{assert.equal(normalizeUsername('  PLAYER_1  '),'PLAYER_1');assert.equal(validUsername('abc'),true);for(const x of['ab','a b','<script>','abcdefghijklmnopq'])assert.equal(validUsername(x),false)});
+test('score calculation',()=>{assert.equal(calculateScore({distance:10,durationMs:1000,targetsDestroyed:2,comboBonus:30,nearMisses:1}),415);assert.equal(calculateScore({distance:-2}),0)});
+test('difficulty progression is capped',()=>{const d=new DifficultyDirector,a=d.at(0),b=d.at(120),c=d.at(1e9);assert.ok(b.speed>a.speed);assert.ok(b.minReaction<=a.minReaction);assert.equal(c.speed,780);assert.ok(c.minReaction>=1.05)});
+test('leaderboard deduplicates and sorts top ten',()=>{const input=[{username:'AAA',score:2},{username:'AAA',score:9},{username:'BBB',score:7},...Array.from({length:12},(_,i)=>({username:`P_${i}`,score:i}))];const top=dedupeTop(input);assert.equal(top.length,10);assert.equal(top[0].score,11);assert.equal(top.find(x=>x.username==='AAA').score,9);assert.ok(top.every((x,i)=>i===0||top[i-1].score>=x.score))});
+test('submission validation',()=>{const good={username:'PLAYER_1',score:5000,distance:500,durationMs:10000,maxCombo:4,targetsDestroyed:8};assert.equal(validSubmission(good),true);assert.equal(validSubmission({...good,username:'<x>'}),false);assert.equal(validSubmission({...good,score:999999}),false);assert.equal(validSubmission({...good,distance:1.2}),false)});
+test('pattern safety preserves reaction room',()=>{assert.equal(ObstacleManager.patternIsSafe([{x:0},{x:600},{x:1200}],780),true);assert.equal(ObstacleManager.patternIsSafe([{x:0},{x:100}],780),false)});
