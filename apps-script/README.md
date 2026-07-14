@@ -6,4 +6,6 @@
 4. Copy the `/exec` URL into `LEADERBOARD_API_URL` in `src/config.js`.
 5. Open `?action=health`, then `?action=top&limit=10`.
 
-The script creates the `Leaderboard` sheet and headers. Google Sheets plus server validation provides only basic tamper resistance; it is not an authenticated backend.
+The script creates the `Leaderboard` sheet and headers. Existing sheets using the previous RollerGuns schema are extended with the new level, wave, boss, enemy, and army columns; old username/score rows remain readable.
+
+New submissions contain `username`, `score`, `levelReached`, `waveReached`, `bossesDefeated`, `enemiesDefeated`, `maxRollers`, `durationMs`, and `gameVersion`. Google Sheets plus server validation provides only basic tamper resistance; it is not an authenticated backend.

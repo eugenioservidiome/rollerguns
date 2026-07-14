@@ -1,2 +1,17 @@
-import{clamp}from"./utils.js";
-export class DifficultyDirector{at(seconds){const p=Math.log1p(Math.max(0,seconds)/20);return{speed:clamp(330+p*125,330,780),minReaction:clamp(1.45-p*.08,1.05,1.45),targetChance:clamp(.18+p*.09,.18,.42),bonusChance:.055,complexity:seconds<12?1:seconds<35?2:3,comboMultiplier:1+Math.min(4,Math.floor(seconds/40))}}}
+import { clamp } from "./utils.js";
+
+export class DifficultyDirector {
+  at(level, wave) {
+    const progress = Math.max(0, (level - 1) * 5 + wave - 1);
+    return {
+      enemyHealth: 1 + progress * 0.105,
+      enemyDamage: 1 + progress * 0.065,
+      density: clamp(1 + Math.floor(progress / 3), 1, 8),
+      towers: clamp(Math.floor((progress + 1) / 5), 0, 5),
+      elites: clamp(Math.floor(progress / 6), 0, 4),
+      gateTier: clamp(1 + Math.floor(progress / 5), 1, 4),
+      waveDuration: clamp(12 + progress * 0.35, 12, 28),
+      bossAbilities: clamp(1 + Math.floor(level / 2), 1, 5),
+    };
+  }
+}
